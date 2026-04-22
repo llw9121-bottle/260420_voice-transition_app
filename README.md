@@ -11,9 +11,13 @@
   - `paragraphs` - 整理为自然段落
   - `behavior_match` - 关键行为匹配（使用百炼大模型分析）
 - **自定义行为匹配**：用户可以定义自己感兴趣的行为模式，LLM 自动识别并标注
+- **行为频率统计**：自动统计各行为出现频率，按置信度分类汇总在文档末尾
+- **逐步精细化处理**：`清洗文本 → LLM语义段落整理 → 行为匹配` 三阶段处理，提升匹配精度
+- **超长文本支持**：自动分块处理超长文本，理论支持任意长度，避免上下文溢出
 - **多种导出格式**：支持 Markdown、JSON、Word 文档导出
 - **网络自动重连**：网络临时断开后自动恢复，不丢失已转录内容
 - **内存优化**：长时间录音内存使用稳定
+- **可配置高级选项**：段落整理、自动分块均可开关配置
 
 ## 🖥 技术栈
 
@@ -94,9 +98,18 @@ python run_gui.py
 
 1. 选择 `behavior_match` 风格
 2. 点击「行为配置」打开配置对话框
-3. 添加你想要识别的行为名称和描述
-4. 保存配置后开始录音
-5. 导出时 LLM 会自动识别文本中的匹配行为并标注
+3. 添加你想要识别的行为名称和描述（支持 4-7 个自定义行为）
+4. **高级选项**：
+   - ✅ 启用 LLM 段落整理：先按语义重新分段，提升匹配质量
+   - ✅ 自动分块处理超长文本：超过 3 万字自动分割，避免上下文溢出
+5. 保存配置后开始录音
+6. 停止录音后，LLM 会自动识别文本中的匹配行为并原位标注
+7. 导出文档末尾自动生成**行为频率统计表格**，按置信度分类汇总
+
+**处理流程：**
+```
+原始文本 → 清洗（去语气词/重复）→ LLM语义段落整理 → 行为匹配识别 → 原位标记 + 频率统计汇总
+```
 
 示例配置：
 | 行为名称 | 行为描述 |
@@ -105,39 +118,64 @@ python run_gui.py
 | 用户反馈问题 | 用户反馈使用中遇到的问题或bug |
 | 确认需求 | 双方确认需求范围和验收标准 |
 
+**输出示例：**
+```
+...正文内容...
+
+---
+**行为频率统计**
+
+| 行为名称 | 总计 | 高置信度(≥0.8) | 中置信度(0.6-0.8) | 低置信度(<0.6) |
+|---------|-----:|---------------:|-----------------:|--------------:|
+| 决策安排 | 3 | 2 | 1 | 0 |
+| 风险识别 | 2 | 1 | 1 | 0 |
+| 前瞻思考 | 1 | 0 | 0 | 1 |
+| **合计** | **6** | **3** | **2** | **1** |
+```
+
 ## 📁 项目结构
 
 ```
 voice-transition-app/
 ├── api/                    # API 客户端层
-│   ├── dashscope_asr.py   # DashScope 实时 ASR 客户端
-│   └── bailian_llm.py     # 百炼大语言模型客户端
+│   ├── dashscope_asr.py   # DashScope 实时 ASR 客户端（支持自动重连）
+│   └── bailian_llm.py     # 百炼大语言模型客户端（段落整理）
 ├── core/                   # 核心业务逻辑层
 │   ├── audio_recorder.py  # PyAudio 音频采集
 │   ├── realtime_transcriber.py  # 整合录音 + ASR
 │   └── formatter/         # 文本格式化和导出
-│       ├── base.py        # 基础数据结构
-│       ├── styles.py      # 格式化风格实现
-│       ├── behavior_matcher.py  # 行为匹配器
+│       ├── base.py        # 基础数据结构（FormattedDocument, BehaviorMatch）
+│       ├── styles.py      # 格式化风格实现（Raw/Cleaned/Paragraphs/BehaviorMatch）
+│       ├── behavior_matcher.py  # 行为匹配器（支持自动分块超长文本）
+│       ├── text_cleaner.py # 文本清洗（去语气词、重复）
 │       ├── exporters.py   # 导出器 (JSON/Markdown/Word)
 │       └── naming.py      # 文件命名策略
 ├── gui/                    # GUI 界面层
 │   ├── main_window.py     # 主窗口
-│   ├── behavior_config_dialog.py  # 行为配置对话框
+│   ├── behavior_config_dialog.py  # 行为配置对话框（支持高级选项）
 │   ├── export_dialog.py   # 导出对话框
-│   └── ...
 ├── config/                 # 配置层
-│   └── settings.py        # 应用配置管理
+│   └── settings.py        # 应用配置管理（pydantic-settings）
 ├── utils/                  # 工具模块
 │   ├── exceptions.py      # 自定义异常
 │   └── logger.py          # 日志配置
-├── tests/                  # 测试
+├── tests/                  # 单元测试和端到端测试
+│   ├── __init__.py
+│   ├── conftest.py         # pytest 配置
 │   ├── test_config.py     # 配置单元测试
-│   ├── test_formatter.py  # 格式化单元测试
-│   └── e2e/               # 端到端功能测试
+│   ├── test_audio_device.py # 音频设备单元测试
+│   ├── test_formatter.py  # 格式化单元测试（含行为频率统计）
+│   └── e2e/               # 端到端功能测试（需要 API Key）
+│       ├── test_realtime_asr.py
+│       ├── test_behavior_matcher_llm.py
+│       └── test_export.py
 ├── app.py                  # 应用入口
+├── run_gui.py              # GUI 启动脚本（备选）
 ├── CLAUDE.md               # Claude Code 开发指南
+├── README.md               # 项目说明
+├── LICENSE                 # MIT 许可证
 ├── requirements.txt        # Python 依赖
+├── .env.example            # 环境变量示例
 └── .gitignore              # Git 忽略规则
 ```
 
