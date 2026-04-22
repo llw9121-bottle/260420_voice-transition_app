@@ -97,19 +97,19 @@ class AudioSettings(BaseSettings):
 
 class DocumentSettings(BaseSettings):
     """文档生成配置"""
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
-    
+
     output_dir: str = Field(
         default="./output",
         description="文档输出目录",
         validation_alias="OUTPUT_DIR"
     )
-    
+
     default_format_style: str = Field(
         default="standard",
         description="默认格式化风格(standard/formal/concise/meeting)",
@@ -117,22 +117,69 @@ class DocumentSettings(BaseSettings):
     )
 
 
-class AppSettings(BaseSettings):
-    """应用全局配置"""
-    
+class ASRSettings(BaseSettings):
+    """语音识别配置"""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
-    
+
+    language: str = Field(
+        default="zh",
+        description="识别语言 (zh=中文, yue=粤语, en=英文, ja=日语等)",
+        validation_alias="ASR_LANGUAGE"
+    )
+
+    vad_enable: bool = Field(
+        default=True,
+        description="是否启用语音活动检测(VAD)",
+        validation_alias="ASR_VAD_ENABLE"
+    )
+
+    vad_threshold: float = Field(
+        default=0.0,
+        description="VAD检测阈值 [-1, 1], 推荐 0.0",
+        validation_alias="ASR_VAD_THRESHOLD"
+    )
+
+    vad_silence_ms: int = Field(
+        default=400,
+        description="VAD静音检测时长(ms) [200, 6000]",
+        validation_alias="ASR_VAD_SILENCE_MS"
+    )
+
+    auto_reconnect: bool = Field(
+        default=True,
+        description="网络断开是否自动重连",
+        validation_alias="ASR_AUTO_RECONNECT"
+    )
+
+    max_reconnect_attempts: int = Field(
+        default=3,
+        description="最大重连尝试次数",
+        validation_alias="ASR_MAX_RECONNECT_ATTEMPTS"
+    )
+
+
+class AppSettings(BaseSettings):
+    """应用全局配置"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
     debug: bool = Field(default=False, description="调试模式")
     log_level: str = Field(default="INFO", description="日志级别")
-    
+
     # 子配置
     api: APISettings = Field(default_factory=APISettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
     document: DocumentSettings = Field(default_factory=DocumentSettings)
+    asr: ASRSettings = Field(default_factory=ASRSettings)
 
 
 # 全局配置实例
@@ -174,3 +221,11 @@ if __name__ == "__main__":
     logger.info("\n=== 文档配置 ===")
     logger.info(f"输出目录: {settings.document.output_dir}")
     logger.info(f"默认格式风格: {settings.document.default_format_style}")
+
+    logger.info("\n=== ASR 识别配置 ===")
+    logger.info(f"识别语言: {settings.asr.language}")
+    logger.info(f"VAD启用: {settings.asr.vad_enable}")
+    logger.info(f"VAD阈值: {settings.asr.vad_threshold}")
+    logger.info(f"VAD静音时长: {settings.asr.vad_silence_ms}ms")
+    logger.info(f"自动重连: {settings.asr.auto_reconnect}")
+    logger.info(f"最大重连次数: {settings.asr.max_reconnect_attempts}")

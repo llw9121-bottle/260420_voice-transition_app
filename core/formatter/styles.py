@@ -114,7 +114,7 @@ class ParagraphStyle(StyleFormatter):
             from api.bailian_llm import reorganize_paragraphs
             try:
                 logger.info("开始LLM语义段落整理...")
-                processed_text = reorganize_paragraphs(cleaned_text)
+                processed_text = reorganize_paragraphs(cleaned_text, language=document.language)
                 logger.info("LLM段落整理完成")
                 document.formatted_text = processed_text
             except Exception as e:
@@ -221,11 +221,12 @@ class BehaviorMatchStyle(StyleFormatter):
         # 步骤2: （可选）LLM段落整理
         from api.bailian_llm import reorganize_paragraphs
         processed_text = cleaned_text
+        doc_language = document.language
 
         if enable_para_reorg and config and config.behaviors:
             try:
                 logger.info("开始LLM段落整理...")
-                processed_text = reorganize_paragraphs(cleaned_text)
+                processed_text = reorganize_paragraphs(cleaned_text, language=doc_language)
                 logger.info("LLM段落整理完成")
             except Exception as e:
                 logger.warning(f"LLM段落整理失败，使用清洗后原始文本: {e}")
@@ -236,10 +237,11 @@ class BehaviorMatchStyle(StyleFormatter):
         if config and config.behaviors:
             try:
                 # 创建匹配器
-                if not self._matcher or self._matcher.config != config:
+                if not self._matcher or self._matcher.config != config or self._matcher.language != doc_language:
                     self._matcher = BehaviorMatcher(
                         config,
-                        auto_chunk_long_text=auto_chunk
+                        auto_chunk_long_text=auto_chunk,
+                        language=doc_language
                     )
 
                 # 执行行为匹配

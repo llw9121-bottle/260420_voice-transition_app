@@ -80,9 +80,14 @@ class RealtimeTranscriber:
         self,
         api_key: Optional[str] = None,
         sample_rate: int = 16000,
-        enable_vad: bool = True,
+        language: Optional[str] = None,
+        enable_vad: Optional[bool] = None,
+        vad_threshold: Optional[float] = None,
+        vad_silence_ms: Optional[int] = None,
         auto_rotate: bool = True,
         max_session_duration: float = 20 * 60,
+        auto_reconnect: Optional[bool] = None,
+        max_reconnect_attempts: Optional[int] = None,
         save_audio: bool = True
     ):
         """
@@ -91,18 +96,28 @@ class RealtimeTranscriber:
         Args:
             api_key: DashScope API Key
             sample_rate: 音频采样率
-            enable_vad: 是否启用语音活动检测
+            language: 识别语言 (zh=中文, yue=粤语, en=英文等)，默认从配置读取
+            enable_vad: 是否启用语音活动检测(VAD)，默认从配置读取
+            vad_threshold: VAD检测阈值 [-1, 1]，默认从配置读取
+            vad_silence_ms: VAD静音检测时长(ms) [200, 6000]，默认从配置读取
             auto_rotate: 是否启用自动会话轮替（支持长时间录音）
             max_session_duration: 单个会话最大时长（秒），默认20分钟
+            auto_reconnect: 网络断开是否自动重连，默认从配置读取
+            max_reconnect_attempts: 最大重连尝试次数，默认从配置读取
             save_audio: 是否保存完整音频数据用于导出WAV文件，默认True
         """
-        # 优先使用传入的api_key，然后使用settings中的配置
+        # 优先使用传入的参数，然后使用settings中的配置
         from config.settings import settings
         self.api_key = api_key or settings.api.dashscope_api_key
         self.sample_rate = sample_rate
-        self.enable_vad = enable_vad
+        self.language = language if language is not None else settings.asr.language
+        self.enable_vad = enable_vad if enable_vad is not None else settings.asr.vad_enable
+        self.vad_threshold = vad_threshold if vad_threshold is not None else settings.asr.vad_threshold
+        self.vad_silence_ms = vad_silence_ms if vad_silence_ms is not None else settings.asr.vad_silence_ms
         self.auto_rotate = auto_rotate
         self.max_session_duration = max_session_duration
+        self.auto_reconnect = auto_reconnect if auto_reconnect is not None else settings.asr.auto_reconnect
+        self.max_reconnect_attempts = max_reconnect_attempts if max_reconnect_attempts is not None else settings.asr.max_reconnect_attempts
         self.save_audio = save_audio
 
         # 音频录制器
@@ -118,9 +133,14 @@ class RealtimeTranscriber:
         self.asr_config = ASRConfig(
             api_key=self.api_key or "",
             sample_rate=sample_rate,
-            enable_vad=enable_vad,
+            language=self.language,
+            enable_vad=self.enable_vad,
+            vad_threshold=self.vad_threshold,
+            vad_silence_ms=self.vad_silence_ms,
             auto_rotate=auto_rotate,
             max_session_duration=max_session_duration,
+            auto_reconnect=self.auto_reconnect,
+            max_reconnect_attempts=self.max_reconnect_attempts,
             rotate_on_silence=True
         )
         self.asr_client: Optional[DashScopeASRClient] = None

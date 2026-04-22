@@ -117,10 +117,11 @@ class BehaviorMatcher:
 
     使用LLM识别转录文本中的关键行为。
     支持超长文本自动分块处理，避免上下文溢出。
+    支持多语言提示词，根据识别语言自动选择。
     """
 
-    # LLM提示词模板
-    SYSTEM_PROMPT = """你是一个专业的行为分析助手。你的任务是分析转录文本，识别其中是否符合预定义的关键行为。
+    # LLM提示词模板 - Chinese
+    SYSTEM_PROMPT_ZH = """你是一个专业的行为分析助手。你的任务是分析转录文本，识别其中是否符合预定义的关键行为。
 
 分析要求：
 1. 仔细阅读转录文本
@@ -139,6 +140,26 @@ class BehaviorMatcher:
   }
 ]"""
 
+    # LLM提示词模板 - English
+    SYSTEM_PROMPT_EN = """You are a professional behavior analysis assistant. Your task is to analyze the transcribed text and identify whether it contains the predefined key behaviors.
+
+Analysis Requirements:
+1. Read the transcribed text carefully
+2. Determine whether the text reflects the specified key behaviors
+3. For matched behaviors, extract the original text reference and evaluate the confidence
+4. Output only JSON format, do not add any other explanation
+
+Output format must be a JSON array as follows:
+[
+  {
+    "behavior_name": "Behavior Name",
+    "matched": true/false,
+    "original_text": "Matched original text (empty if matched is false)",
+    "confidence": 0.85,
+    "explanation": "Brief explanation why it matches"
+  }
+]"""
+
     # 超长文本处理配置
     MAX_TOKENS_PER_CHUNK = 10000  # 每块最大token数
     TOKEN_RATIO_CJK = 1.5  # 汉字token换算比例 (汉字≈1.5token)
@@ -148,7 +169,8 @@ class BehaviorMatcher:
         config: BehaviorConfig,
         llm_client: Optional[BailianLLMClient] = None,
         auto_chunk_long_text: bool = True,
-        max_tokens_per_chunk: int = None
+        max_tokens_per_chunk: int = None,
+        language: str = "zh"
     ):
         """
         初始化匹配器
@@ -158,12 +180,20 @@ class BehaviorMatcher:
             llm_client: LLM客户端，如未提供则自动创建
             auto_chunk_long_text: 是否自动分块处理超长文本
             max_tokens_per_chunk: 每块最大token数，默认10000
+            language: 文本语言 (zh=中文, en=英文 等)，用于选择对应提示词
         """
         self.config = config
+        self.language = language
         self.llm = llm_client or BailianLLMClient()
         self.auto_chunk_long_text = auto_chunk_long_text
         if max_tokens_per_chunk:
             self.MAX_TOKENS_PER_CHUNK = max_tokens_per_chunk
+
+        # 根据语言选择系统提示词
+        if language.startswith("en"):
+            self.SYSTEM_PROMPT = self.SYSTEM_PROMPT_EN
+        else:
+            self.SYSTEM_PROMPT = self.SYSTEM_PROMPT_ZH
 
         # 验证配置
         is_valid, error_msg = config.validate()
@@ -184,10 +214,21 @@ class BehaviorMatcher:
             if behavior.examples:
                 desc += f"\n   示例: {'; '.join(behavior.examples[:2])}"
             behaviors_desc.append(desc)
-        
+
         behaviors_text = '\n'.join(behaviors_desc)
-        
-        prompt = f"""请分析以下转录文本，识别是否包含以下关键行为：
+
+        if self.language.startswith("en"):
+            prompt = f"""Please analyze the following transcribed text and identify whether it contains the following key behaviors:
+
+【Key Behavior Definitions】
+{behaviors_text}
+
+【Transcribed Text】
+{text}
+
+Please output the analysis result in the JSON format specified in the system prompt."""
+        else:
+            prompt = f"""请分析以下转录文本，识别是否包含以下关键行为：
 
 【关键行为定义】
 {behaviors_text}
@@ -196,7 +237,7 @@ class BehaviorMatcher:
 {text}
 
 请按照系统指令中的JSON格式输出分析结果。"""
-        
+
         return prompt
 
     def _estimate_tokens(self, text: str) -> int:

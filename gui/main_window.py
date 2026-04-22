@@ -54,6 +54,11 @@ class MainWindow:
         # 创建字体大小变量
         self.font_size = ctk.IntVar(value=saved_font_size)
 
+        # 从用户配置加载 ASR 设置，如果没有则使用默认配置
+        from config.settings import settings
+        self.saved_language = saved_config.get("asr_language", settings.asr.language)
+        self.saved_vad_ms = saved_config.get("vad_silence_ms", settings.asr.vad_silence_ms)
+
         # 存储回调函数
         self.on_start_callback: Optional[Callable] = None
         self.on_stop_callback: Optional[Callable] = None
@@ -371,7 +376,84 @@ class MainWindow:
         self.separator3 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
         self.separator3.pack(fill="x", padx=10, pady=10)
 
-        # 5. 音频设备选择（不常用，放最底部）
+        # 5. ASR 识别设置
+        self.asr_label = ctk.CTkLabel(
+            self.settings_frame,
+            text="识别设置",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+        )
+        self.asr_label.pack(anchor="w", padx=10, pady=(0, 5))
+
+        # 语言选择
+        self.language_label = ctk.CTkLabel(
+            self.settings_frame,
+            text="识别语言:",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+        )
+        self.language_label.pack(anchor="w", padx=15, pady=(0, 3))
+
+        # 常用语言列表，按使用频率排序
+        language_options = [
+            "zh - 中文",
+            "yue - 粤语",
+            "en - 英文",
+            "ja - 日语",
+            "ko - 韩语",
+            "de - 德语",
+            "fr - 法语",
+            "es - 西班牙语",
+            "ru - 俄语",
+            "other"
+        ]
+        # 找到匹配用户保存语言的选项
+        default_language_display = language_options[0]
+        for opt in language_options:
+            if opt.startswith(self.saved_language + " "):
+                default_language_display = opt
+                break
+        self.language_var = ctk.StringVar(value=default_language_display)
+        self.language_menu = ctk.CTkOptionMenu(
+            self.settings_frame,
+            values=language_options,
+            variable=self.language_var,
+            command=self._on_language_change,
+            height=30,
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+        )
+        self.language_menu.pack(fill="x", padx=15, pady=(0, 8))
+
+        # VAD 静音检测时长
+        self.vad_label = ctk.CTkLabel(
+            self.settings_frame,
+            text=f"断句灵敏度: {self.saved_vad_ms} ms",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+        )
+        self.vad_label.pack(anchor="w", padx=15, pady=(0, 3))
+
+        self.vad_silence_var = ctk.IntVar(value=self.saved_vad_ms)
+        self.vad_slider = ctk.CTkSlider(
+            self.settings_frame,
+            from_=200,
+            to=2000,
+            number_of_steps=18,  # 200-2000 每步100
+            variable=self.vad_silence_var,
+            command=self._on_vad_change
+        )
+        self.vad_slider.pack(fill="x", padx=15, pady=(0, 3))
+
+        self.vad_hint_label = ctk.CTkLabel(
+            self.settings_frame,
+            text="短=灵敏快断  长=稳定少断",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=9),
+            text_color="gray"
+        )
+        self.vad_hint_label.pack(anchor="e", padx=15, pady=(0, 10))
+
+        # 分隔线
+        self.separator4 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
+        self.separator4.pack(fill="x", padx=10, pady=10)
+
+        # 6. 音频输入设备选择（不常用，放最底部）
         self.device_label = ctk.CTkLabel(
             self.settings_frame,
             text="音频输入设备",
@@ -379,24 +461,31 @@ class MainWindow:
         )
         self.device_label.pack(anchor="w", padx=10, pady=(0, 5))
 
+        # 设备选择框架 - 下拉框和刷新按钮并排显示
+        self.device_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.device_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.device_frame.grid_columnconfigure(0, weight=1)
+        self.device_frame.grid_columnconfigure(1, weight=0)
+
         self.device_var = ctk.StringVar(value="默认设备")
         self.device_menu = ctk.CTkOptionMenu(
-            self.settings_frame,
+            self.device_frame,
             values=["加载中..."],
             variable=self.device_var,
             command=self._on_device_change,
             height=30
         )
-        self.device_menu.pack(fill="x", padx=10, pady=(0, 5))
+        self.device_menu.grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
-        # 刷新设备按钮 - 缩小高度让它更紧凑
+        # 刷新设备按钮
         self.refresh_device_btn = ctk.CTkButton(
-            self.settings_frame,
+            self.device_frame,
             text="刷新",
             command=self._refresh_devices,
-            height=28
+            height=30,
+            width=60
         )
-        self.refresh_device_btn.pack(fill="x", padx=10, pady=(0, 10))
+        self.refresh_device_btn.grid(row=0, column=1, sticky="e")
 
         # 存储设备列表
         self.available_devices: list[tuple[int, str]] = []  # (index, name)
@@ -560,6 +649,18 @@ class MainWindow:
             logger.info("保存原始音频已开启")
         else:
             logger.info("保存原始音频已关闭")
+
+    def _on_language_change(self, choice: str):
+        """语言选择改变"""
+        # 从显示文本中提取语言代码 (例如 "zh - 中文" -> "zh")
+        lang_code = choice.split()[0]
+        logger.info(f"识别语言已更改为: {choice}")
+
+    def _on_vad_change(self, value: float):
+        """VAD 滑块值改变"""
+        ms = int(value)
+        self.vad_label.configure(text=f"断句灵敏度: {ms} ms")
+        logger.debug(f"VAD 静音检测时长已调整: {ms} ms")
 
     def _bind_shortcuts(self):
         """绑定键盘快捷键"""
@@ -923,6 +1024,25 @@ class MainWindow:
         """
         return self.llm_para_var.get()
 
+    def get_asr_language(self) -> str:
+        """获取当前选择的识别语言代码
+
+        Returns:
+            语言代码 (zh, en, yue 等)
+        """
+        choice = self.language_var.get()
+        # 从显示文本提取语言代码 ("zh - 中文" -> "zh"
+        lang_code = choice.split()[0]
+        return lang_code
+
+    def get_vad_silence_ms(self) -> int:
+        """获取当前设置的VAD静音检测时长
+
+        Returns:
+            静音时长(毫秒)
+        """
+        return self.vad_silence_var.get()
+
     def run(self):
         """运行主循环"""
         self.root.mainloop()
@@ -940,9 +1060,12 @@ class MainWindow:
         Returns:
             配置字典，包含所有用户偏好
         """
+        from config.settings import settings
         default_config = {
             "appearance_mode": "System",
-            "font_size": 16
+            "font_size": 16,
+            "asr_language": settings.asr.language,
+            "vad_silence_ms": settings.asr.vad_silence_ms
         }
 
         if not self.USER_CONFIG_FILE.exists():
@@ -961,6 +1084,10 @@ class MainWindow:
             font_size = merged.get("font_size")
             if not isinstance(font_size, int) or font_size < 16 or font_size > 24:
                 merged["font_size"] = default_config["font_size"]
+            # 验证VAD静音时长范围
+            vad_ms = merged.get("vad_silence_ms")
+            if not isinstance(vad_ms, int) or vad_ms < 200 or vad_ms > 2000:
+                merged["vad_silence_ms"] = default_config["vad_silence_ms"]
             logger.debug(f"加载用户配置: {merged}")
             return merged
         except Exception as e:
@@ -981,6 +1108,8 @@ class MainWindow:
             # 更新所有当前设置
             config["appearance_mode"] = self.appearance_mode.get()
             config["font_size"] = self.font_size.get()
+            config["asr_language"] = self.get_asr_language()
+            config["vad_silence_ms"] = self.get_vad_silence_ms()
 
             # 保存回去
             with open(self.USER_CONFIG_FILE, 'w', encoding='utf-8') as f:

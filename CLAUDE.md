@@ -14,10 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **核心功能:**
 - 实时语音实时录音和流式识别
+- **多语言ASR支持**: 支持中文、粤语、英文、日语、韩语等多种识别语言
+- **VAD参数可配置**: 可调节静音检测时长，控制断句灵敏度（适合对话/朗读等不同场景）
 - 支持**暂停/继续录音**，长时间录音中间可以休息
 - **自动保存临时文件**防崩溃，意外重启可恢复未完成录音
 - 多种文本格式化风格（原始、清洗、分段、关键行为匹配）
 - 支持自定义行为匹配，使用百炼大模型分析对话内容
+- **中英双语LLM提示词**: 根据识别语言自动选择对应语言提示词，获得最佳效果
 - 导出为 Markdown、JSON、Word 格式
 - 图形界面使用 CustomTkinter
 
@@ -63,6 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 使用 pydantic-settings 管理配置
 - 从 `.env` 文件加载 API Key
 - 提供 `check_api_configuration()` 检查配置状态
+- `ASRSettings` 类：管理ASR高级配置（识别语言、VAD参数、自动重连）
 
 **api/dashscope_asr.py**
 - 封装 DashScope OmniRealtimeConversation WebSocket 连接
@@ -76,11 +80,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **core/formatter/**
 - `base.py` - 定义基础数据结构 (`FormattedDocument`, `BehaviorMatch`, `TranscriptionSegment`) 和 `FormatterService`
+  - `FormattedDocument` 新增 `language` 字段存储识别语言
 - `styles.py` - 各种格式化风格实现
   - `CleanedStyle` - 基础清洗
   - `ParagraphStyle` - 分段整理
   - `BehaviorMatchStyle` - 关键行为匹配（调用 LLM）
 - `behavior_matcher.py` - 行为匹配器，使用百炼 LLM 分析文本
+  - 支持中英双语提示词，根据识别语言自动选择
 - `exporters.py` - 导出器 (JSON/Markdown/Word)
 - `naming.py` - 文件命名策略
 
@@ -192,7 +198,7 @@ OUTPUT_DIR=./output
 应用会在项目根目录创建以下配置文件存储用户偏好，这些文件已经加入 `.gitignore` 不会提交到 Git：
 
 - `.export_config.json` - 记住用户上次选择的导出目录
-- `.user_config.json` - 用户偏好设置（主题模式等）
+- `.user_config.json` - 用户偏好设置（主题模式、识别语言、VAD参数等）
 
 ### 测试
 

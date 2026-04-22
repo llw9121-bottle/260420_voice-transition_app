@@ -115,11 +115,16 @@ class VoiceTranscriptionApp:
         self.current_partial = ""
 
         # 创建新文档
+        # 获取 ASR 设置
+        language = self.main_window.get_asr_language()
+        vad_silence_ms = self.main_window.get_vad_silence_ms()
+
         self.current_document = FormattedDocument(
             title=f"录音_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
             raw_text="",
             style=FormattingStyle.RAW,
             session_id=f"session_{datetime.now().timestamp()}",
+            language=language,
             created_at=datetime.now()
         )
 
@@ -141,6 +146,8 @@ class VoiceTranscriptionApp:
             # 创建转录器
             self.transcriber = RealtimeTranscriber(
                 api_key=api_key,
+                language=language,
+                vad_silence_ms=vad_silence_ms,
                 save_audio=save_audio
             )
 

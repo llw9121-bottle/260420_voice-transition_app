@@ -272,7 +272,7 @@ def quick_summary(text: str, max_length: int = 200) -> str:
     return formatter.generate_summary(text, max_length=max_length)
 
 
-def reorganize_paragraphs(text: str) -> str:
+def reorganize_paragraphs(text: str, language: str = "zh") -> str:
     """
     使用LLM整理文本段落
 
@@ -281,12 +281,31 @@ def reorganize_paragraphs(text: str) -> str:
 
     Args:
         text: 原始清洗后的文本
+        language: 文本语言 (zh=中文, en=英文 等)，用于选择对应提示词
 
     Returns:
         整理后的分段文本（段落间用空行分隔）
     """
     client = BailianLLMClient()
-    system_prompt = """你是一个专业的文本整理助手。你的任务是将转录文本按照语义重新整理为自然段落。
+
+    # 根据语言选择对应提示词
+    if language.startswith("en"):
+        # English prompt
+        system_prompt = """You are a professional text reorganization assistant. Your task is to reorganize the transcribed text into natural paragraphs according to semantics.
+
+Requirements:
+1. Keep all content and original meaning unchanged, do not add or remove anything
+2. Split the text into appropriate paragraphs according to semantic logic
+3. Separate paragraphs with blank lines
+4. Only output the reorganized text, do not add any other explanation
+5. Fix obvious colloquialisms but keep the original speaking style"""
+
+        user_prompt = f"""Please reorganize the paragraph structure of the following text according to the requirements:
+
+{text}"""
+    else:
+        # Chinese prompt (default)
+        system_prompt = """你是一个专业的文本整理助手。你的任务是将转录文本按照语义重新整理为自然段落。
 
 要求：
 1. 保持原文所有内容和原意不变，不增不减
@@ -295,7 +314,7 @@ def reorganize_paragraphs(text: str) -> str:
 4. 只输出整理后的文本，不要有任何其他说明
 5. 修正明显的口语化表达，但保留原始说话风格"""
 
-    user_prompt = f"""请按照要求整理以下文本的段落结构：
+        user_prompt = f"""请按照要求整理以下文本的段落结构：
 
 {text}"""
 
@@ -307,12 +326,13 @@ def reorganize_paragraphs(text: str) -> str:
     )
 
 
-def reorganize_paragraphs_chunked(paragraphs: list[str]) -> list[str]:
+def reorganize_paragraphs_chunked(paragraphs: list[str], language: str = "zh") -> list[str]:
     """
     逐段整理多个段落
 
     Args:
         paragraphs: 原始段落列表
+        language: 文本语言 (zh=中文, en=英文 等)，用于选择对应提示词
 
     Returns:
         整理后的段落列表
@@ -322,6 +342,6 @@ def reorganize_paragraphs_chunked(paragraphs: list[str]) -> list[str]:
         if not para.strip():
             results.append(para)
             continue
-        result = reorganize_paragraphs(para)
+        result = reorganize_paragraphs(para, language=language)
         results.append(result.strip())
     return results

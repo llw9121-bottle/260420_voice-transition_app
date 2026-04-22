@@ -99,6 +99,20 @@ class BehaviorConfigDialog:
                 "enable_paragraph_reorganization": True,
                 "auto_chunk_long_text": True
             }
+        },
+        {
+            "name": "Leadership Traits (English)",
+            "description": "Default 4-key behavior template for leadership assessment (English)",
+            "config": {
+                "behaviors": [
+                    {"name": "Strategic Thinking", "description": "Thinks long-term, sets future goals, takes strategic perspective", "examples": ["I've planned a multi-year roadmap", "This needs to be assessed in advance"]},
+                    {"name": "Achievement Orientation", "description": "Strong career ambition, driven to accomplish difficult goals", "examples": ["I am determined to deliver", "Goals must be strictly achieved", "I want to take on challenges"]},
+                    {"name": "Critical Analysis", "description": "Critically evaluates information, thinks independently and carefully, identifies potential issues", "examples": ["I think this information may be problematic", "We need more evidence", "Why should we do this"]},
+                    {"name": "Leadership Drive", "description": "Willing to take team leadership responsibility, enjoys guiding others, leading and controlling situations", "examples": ["I'll take ownership of the final outcome", "Led the team through the entire process", "I will lead the work planning"]},
+                ],
+                "enable_paragraph_reorganization": True,
+                "auto_chunk_long_text": True
+            }
         }
     ]
 

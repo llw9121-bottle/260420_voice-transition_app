@@ -47,16 +47,17 @@ class FormattedDocument:
     created_at: datetime = field(default_factory=datetime.now)
     style: FormattingStyle = FormattingStyle.RAW
     session_id: Optional[str] = None
-    
+    language: str = "zh"                        # 识别语言 (zh=en 等)
+
     # 内容
     raw_text: str = ""                          # 原始文本
     formatted_text: str = ""                    # 格式化后文本
     segments: List[TranscriptionSegment] = field(default_factory=list)
-    
+
     # 行为匹配（仅在behavior风格时使用）
     behavior_matches: List[BehaviorMatch] = field(default_factory=list)
     behaviors_config: Optional[List[str]] = None  # 配置的行为列表
-    
+
     # 统计
     word_count: int = 0
     duration_seconds: float = 0.0
@@ -69,6 +70,7 @@ class FormattedDocument:
             "created_at": self.created_at.isoformat(),
             "style": self.style.value,
             "session_id": self.session_id,
+            "language": self.language,
             "raw_text": self.raw_text,
             "formatted_text": self.formatted_text,
             "segments": [
