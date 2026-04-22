@@ -1243,9 +1243,6 @@ VAD(语音活动检测)静音时长控制断句灵敏度：
 • Markdown (*.md) - 适合阅读和分享
 • Word (*.docx) - 适合正式文档
 • JSON (*.json) - 保留完整元数据用于二次处理
-
-项目主页与问题反馈：
-https://github.com/llw9121-bottle/voice-transition-app
 """
 
         # 创建文本框显示帮助
