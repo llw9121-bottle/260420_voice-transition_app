@@ -129,8 +129,8 @@ class ExportDialog:
         # 格式选项
         formats = [
             ("markdown", "Markdown (.md) - 推荐，带格式和标记"),
-            ("json", "JSON (.json) - 结构化数据，完整信息"),
             ("docx", "Word (.docx) - Microsoft Word 文档"),
+            ("json", "JSON (.json) - 结构化数据，完整信息"),
         ]
         
         for value, text in formats:

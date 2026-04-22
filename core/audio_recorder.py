@@ -83,6 +83,10 @@ class AudioRecorder:
         # 存储完整音频数据（用于保存到文件）
         self.recorded_frames: List[bytes] = []
 
+        # 音量电平计算（用于可视化）
+        self._current_rms: float = 0.0
+        self._max_rms: float = 0.0
+
         logger.info("音频录制器初始化完成")
     
     def list_devices(self) -> List[AudioDevice]:
@@ -211,6 +215,8 @@ class AudioRecorder:
             self.is_recording = True
             # 清空之前的录制数据
             self.recorded_frames.clear()
+            # 重置音量电平统计
+            self.reset_volume_level()
             logger.info(
                 f"开始录音: {self.config.sample_rate}Hz, "
                 f"{self.config.channels}通道, 设备索引: {self.device_index}"
@@ -230,7 +236,7 @@ class AudioRecorder:
     ) -> tuple:
         """
         PyAudio流回调函数
-        
+
         每当有新的音频数据块可用时被调用。
         """
         if in_data and self.is_recording:
@@ -240,6 +246,9 @@ class AudioRecorder:
             # 累积音频数据（用于保存到文件），仅在启用保存时
             if self.config.save_audio:
                 self.recorded_frames.append(in_data)
+
+            # 计算当前音量电平（用于可视化）
+            self._update_volume_level(in_data)
 
             # 调用用户回调
             if self.on_audio_callback:
@@ -388,6 +397,48 @@ class AudioRecorder:
             wf.writeframes(audio_data)
 
         logger.info(f"原始录音已保存: {output_path} ({len(audio_data)} bytes)")
+
+    def _update_volume_level(self, audio_bytes: bytes) -> None:
+        """
+        更新当前音量电平（RMS计算）
+
+        Args:
+            audio_bytes: 音频数据字节（16bit PCM）
+        """
+        try:
+            # 转换为numpy数组
+            samples = self.convert_to_numpy(audio_bytes)
+            # 计算RMS（均方根）
+            if len(samples) > 0:
+                rms = np.sqrt(np.mean(np.square(samples.astype(np.float32))))
+                # 使用指数移动平均平滑变化
+                self._current_rms = 0.6 * self._current_rms + 0.4 * rms
+                # 更新最大值
+                if self._current_rms > self._max_rms:
+                    self._max_rms = self._current_rms
+        except Exception as e:
+            logger.debug(f"音量电平计算失败: {e}")
+
+    def get_current_volume(self) -> float:
+        """
+        获取当前音量电平，归一化到 0.0-1.0 范围
+
+        Returns:
+            归一化音量，0 表示静音，1 表示最大音量
+        """
+        if self._max_rms <= 0:
+            return 0.0
+        # 归一化，并使用对数缩放让人眼感受更自然
+        normalized = min(1.0, self._current_rms / max(self._max_rms, 32768))
+        # 对数缩放，增强低音量可见性
+        if normalized > 0:
+            return np.log10(1 + 9 * normalized)
+        return 0.0
+
+    def reset_volume_level(self) -> None:
+        """重置音量电平统计（每次录音开始时调用）"""
+        self._current_rms = 0.0
+        self._max_rms = 0.0
 
     def __del__(self):
         """析构时清理资源"""

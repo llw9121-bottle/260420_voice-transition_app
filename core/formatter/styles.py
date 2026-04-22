@@ -263,6 +263,10 @@ class BehaviorMatchStyle(StyleFormatter):
     def _format_with_matches(self, text: str, matches: List[Any]) -> str:
         """将匹配结果格式化为带标记的文本"""
         if not matches:
+            # 没有匹配到任何行为，添加友好提示
+            if text.strip() and self.behavior_config and self.behavior_config.behaviors:
+                # 有文本且已配置行为，但没有匹配到
+                text = text + "\n\n---\n*未识别到符合定义的关键行为*"
             return text
 
         # 按位置排序

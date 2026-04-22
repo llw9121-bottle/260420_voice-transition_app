@@ -264,16 +264,19 @@ class RealtimeTranscriber:
             except Exception as e:
                 logger.error(f"[Transcriber] 结束 ASR 会话失败: {e}")
         
+        # 计算统计（先保存到局部变量，再重置，保证时长不丢失）
+        calculated_duration = 0.0
+        if self.state.start_time:
+            calculated_duration = time.time() - self.state.start_time
+
         # 关闭连接
         self._cleanup()
-        
-        # 计算统计
-        if self.state.start_time:
-            self.state.audio_duration = time.time() - self.state.start_time
-        
         self.state.reset()
+
+        # 保存计算好的时长，即使 reset 之后仍然保留
+        self.state.audio_duration = calculated_duration
         self._update_status("stopped")
-        
+
         logger.info(f"[Transcriber] 转录完成，时长: {self.state.audio_duration:.1f}秒")
         logger.info(f"[Transcriber] 完整文本: {self.full_transcription[:100]}...")
         
@@ -410,6 +413,15 @@ class RealtimeTranscriber:
             音频时长（秒）
         """
         return self.recorder.get_duration()
+
+    def get_current_volume(self) -> float:
+        """
+        获取当前输入音量，归一化到 0.0-1.0
+
+        Returns:
+            归一化音量，0 表示静音，1 表示最大音量
+        """
+        return self.recorder.get_current_volume()
 
     def __enter__(self):
         """上下文管理器入口"""

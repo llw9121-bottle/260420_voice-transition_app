@@ -64,6 +64,9 @@ class VoiceTranscriptionApp:
         self._setup_callbacks()
         
         logger.info("应用程序初始化完成")
+
+        # 检查API Key配置，未配置时弹出友好提示
+        self._check_api_configuration_on_startup()
         
     def _setup_callbacks(self):
         """设置 GUI 回调函数"""
@@ -110,11 +113,13 @@ class VoiceTranscriptionApp:
 
         # 更新 UI
         self.main_window.update_status("正在录音...")
+        self.main_window.update_duration(0)
+        self.main_window.set_recording_indicator(True)
         self.main_window.transcription_text.configure(state="normal")
         self.main_window.transcription_text.delete("0.0", "end")
         self.main_window.transcription_text.insert("0.0", "开始录音...\n\n")
         self.main_window.transcription_text.configure(state="disabled")
-        
+
         # 启动实时转录线程
         try:
             # 使用配置的API Key
@@ -139,9 +144,22 @@ class VoiceTranscriptionApp:
                 logger.debug(f"使用选中的音频设备，索引: {device_index}")
 
             self.transcriber.start(on_text=on_text, device_index=device_index)
+
+            # 启动时长更新定时器（每秒更新一次）
+            self._update_duration()
         except Exception as e:
             logger.error(f"启动实时转录失败: {e}")
             threading.Thread(target=self._mock_recording, daemon=True).start()
+
+    def _update_duration(self):
+        """更新录音时长显示（定时器回调）"""
+        if self.is_recording and hasattr(self, 'transcriber') and self.transcriber:
+            duration = int(self.transcriber.get_duration())
+            volume = self.transcriber.get_current_volume()
+            self.main_window.update_duration(duration)
+            self.main_window.update_volume(volume)
+            # 1秒后再次更新
+            self.main_window.root.after(1000, self._update_duration)
         
     def _mock_recording(self):
         """模拟录音过程（用于测试）"""
@@ -209,8 +227,10 @@ class VoiceTranscriptionApp:
             full_text = self.transcriber.stop()
             # 获取录音时长（总是设置，不管文本是否为空）
             duration = self.transcriber.get_duration()
-            # 使用实际音频数据计算的更准确时长
+            # 使用实际音频数据计算的更准确时长，如果为0（save_audio=False），使用基于时间的时长
             actual_duration = self.transcriber.get_audio_duration()
+            if actual_duration <= 0 and duration > 0:
+                actual_duration = duration
             self.current_document.duration_seconds = actual_duration
 
             # 双保险：App层实时累积一定是完整的，优先使用 App层累积
@@ -240,18 +260,27 @@ class VoiceTranscriptionApp:
                 except Exception as e:
                     logger.error(f"保存原始录音失败: {e}")
 
-        # 格式化文档
-        if self.current_document:
-            self._format_document()
-
         # 更新 UI
         self.main_window.update_status("录音已停止")
+        self.main_window.update_volume(0)
+        self.main_window.set_recording_indicator(False)
         self.main_window.transcription_text.configure(state="normal")
         self.main_window.transcription_text.insert("end", "\n\n录音结束。")
         self.main_window.transcription_text.configure(state="disabled")
 
-        # 询问是否导出
-        self._prompt_export()
+        # 格式化文档
+        if self.current_document:
+            self._format_document()
+
+        # 不需要LLM处理的情况：格式化已经完成，可以直接提示导出
+        # 需要LLM处理的情况：会在格式化完成回调中提示导出
+        need_llm_processing = (
+            (style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors) or
+            (style == "paragraphs" and self.main_window.get_enable_llm_paragraphs())
+        )
+        if not need_llm_processing:
+            # 格式化已经完成，提示导出
+            self._prompt_export()
         
     def _format_document(self):
         """格式化当前文档"""
@@ -297,24 +326,59 @@ class VoiceTranscriptionApp:
 
         # 对于 behavior_match 模式，需要调用 LLM 处理，可能耗时较长
         # 如果 paragraphs 启用了 LLM 分段，也需要调用 LLM，显示处理提示
-        processing_window = None
         need_llm_processing = (
             (style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors) or
             (style == "paragraphs" and self.main_window.get_enable_llm_paragraphs())
         )
+
         if need_llm_processing:
+            # 显示处理中弹窗
             processing_window = self._show_processing_window()
+            # 在后台线程执行格式化（避免阻塞主线程导致界面卡住）
+            def format_in_background():
+                try:
+                    formatted_doc = formatter.format(self.current_document)
+                    # 在主线程更新结果
+                    self.main_window.root.after(0, lambda: self._on_format_complete(formatted_doc, processing_window))
+                except Exception as e:
+                    logger.error(f"格式化文档失败: {e}")
+                    # 在主线程显示错误
+                    self.main_window.root.after(0, lambda: self._on_format_error(e, processing_window))
 
-        try:
-            # 执行格式化
+            threading.Thread(target=format_in_background, daemon=True).start()
+        else:
+            # 不需要LLM处理，直接在主线程执行
             self.current_document = formatter.format(self.current_document)
-        finally:
-            # 无论如何都关闭处理中弹窗
-            if processing_window:
-                processing_window.destroy()
+            self._update_formatted_display()
 
+    def _on_format_complete(self, formatted_doc: FormattedDocument, processing_window):
+        """格式化完成回调（在主线程执行）"""
+        self.current_document = formatted_doc
+        # 关闭处理中弹窗
+        if processing_window:
+            processing_window.destroy()
         # 更新显示
-        if self.current_document.formatted_text:
+        self._update_formatted_display()
+        logger.info("文档格式化完成")
+        # 格式化完成后提示导出
+        self._prompt_export()
+
+    def _on_format_error(self, error: Exception, processing_window):
+        """格式化错误回调（在主线程执行）"""
+        # 关闭处理中弹窗
+        if processing_window:
+            processing_window.destroy()
+        # 显示错误
+        import tkinter.messagebox as messagebox
+        messagebox.showerror(
+            "格式化失败",
+            f"文档格式化过程中发生错误:\n\n{str(error)}\n\n请检查网络连接和 API Key 配置后重试。"
+        )
+        logger.error(f"格式化文档失败: {error}")
+
+    def _update_formatted_display(self):
+        """更新格式化后的文本显示"""
+        if self.current_document and self.current_document.formatted_text:
             self.main_window.transcription_text.configure(state="normal")
             self.main_window.transcription_text.delete("0.0", "end")
             self.main_window.transcription_text.insert("0.0", self.current_document.formatted_text)
@@ -397,6 +461,32 @@ class VoiceTranscriptionApp:
 
         logger.info("behavior_match 模式开始处理，显示处理中提示")
         return window
+
+    def _check_api_configuration_on_startup(self):
+        """
+        启动时检查API配置，如果未配置弹出友好提示引导用户配置。
+        """
+        from config.settings import check_api_configuration
+        status = check_api_configuration()
+
+        if not status["dashscope_configured"]:
+            # DashScope API Key 未配置，弹出提示
+            def show_config_prompt():
+                import tkinter.messagebox as messagebox
+                result = messagebox.showwarning(
+                    "API Key 未配置",
+                    "检测到 DashScope API Key 尚未配置。\n\n"
+                    "本应用需要阿里云 DashScope 服务进行实时语音识别，请按以下步骤配置：\n"
+                    "1. 在项目根目录复制 .env.example 为 .env\n"
+                    "2. 打开 .env 文件，填入你的 DASHSCOPE_API_KEY\n"
+                    "3. 重启应用\n\n"
+                    "获取 API Key: https://help.aliyun.com/zh/dashscope/developer-reference/acquisition-and-configuration-of-api-key\n\n"
+                    "配置完成后重启应用即可开始使用。"
+                )
+
+            # 在主窗口加载后显示提示
+            self.main_window.root.after(500, show_config_prompt)
+            logger.warning("DashScope API Key 未配置，提示用户配置")
 
     def run(self):
         """运行应用程序"""

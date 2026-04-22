@@ -198,7 +198,7 @@ class MainWindow:
         # 2. 行为匹配配置按钮
         self.behavior_btn = ctk.CTkButton(
             self.settings_frame,
-            text="配置关键行为",
+            text="配置关键行为 (Ctrl+B)",
             command=self._on_behavior_config_click
         )
         self.behavior_btn.pack(fill="x", padx=10, pady=5)
@@ -274,15 +274,44 @@ class MainWindow:
         self.status_frame = ctk.CTkFrame(self.main_frame, height=30)
         self.status_frame.grid(row=2, column=0, padx=10, pady=(5, 10), sticky="ew")
         self.status_frame.grid_propagate(False)
-        
+
+        # 录音状态指示灯（最左侧）
+        self.recording_indicator = ctk.CTkLabel(
+            self.status_frame,
+            text="●",
+            font=ctk.CTkFont(size=16),
+            text_color="gray50"
+        )
+        self.recording_indicator.pack(side="left", padx=(10, 0))
+
         # 状态标签
         self.status_label = ctk.CTkLabel(
             self.status_frame,
             text="就绪",
             font=ctk.CTkFont(size=11)
         )
-        self.status_label.pack(side="left", padx=10)
-        
+        self.status_label.pack(side="left", padx=8, pady=10)
+
+        # 音量指示器框架（放在右侧，时长左边）
+        self.volume_frame = ctk.CTkFrame(
+            self.status_frame,
+            width=80,
+            height=16,
+            fg_color="gray20"
+        )
+        self.volume_frame.pack(side="right", padx=(0, 10))
+        self.volume_frame.grid_propagate(False)
+
+        # 音量进度条
+        self.volume_bar = ctk.CTkProgressBar(
+            self.volume_frame,
+            width=76,
+            height=12,
+            corner_radius=2
+        )
+        self.volume_bar.set(0)
+        self.volume_bar.place(relx=0.5, rely=0.5, anchor="center")
+
         # 录音时长
         self.duration_label = ctk.CTkLabel(
             self.status_frame,
@@ -290,6 +319,9 @@ class MainWindow:
             font=ctk.CTkFont(size=11)
         )
         self.duration_label.pack(side="right", padx=10)
+
+        # 闪烁动画控制
+        self._is_recording_flashing = False
         
     # ===== 回调方法 =====
     
@@ -352,6 +384,12 @@ class MainWindow:
         """绑定键盘快捷键"""
         # 空格键: 开始/停止录音
         self.root.bind('<space>', self._on_space_shortcut)
+        # Esc: 停止录音
+        self.root.bind('<Escape>', self._on_escape_shortcut)
+        # Ctrl+S: 导出文档
+        self.root.bind('<Control-s>', self._on_ctrl_s_shortcut)
+        # Ctrl+B: 打开行为配置
+        self.root.bind('<Control-b>', self._on_ctrl_b_shortcut)
 
     def _on_space_shortcut(self, event):
         """空格键快捷键处理"""
@@ -369,6 +407,20 @@ class MainWindow:
         elif self.stop_btn.cget('state') == 'normal':
             # 当前可以停止，点击停止
             self._on_stop_click()
+
+    def _on_escape_shortcut(self, event):
+        """Esc快捷键处理 - 停止录音"""
+        if self.stop_btn.cget('state') == 'normal':
+            self._on_stop_click()
+
+    def _on_ctrl_s_shortcut(self, event):
+        """Ctrl+S快捷键处理 - 导出文档"""
+        if self.on_export_callback:
+            self.on_export_callback()
+
+    def _on_ctrl_b_shortcut(self, event):
+        """Ctrl+B快捷键处理 - 行为配置"""
+        self._on_behavior_config_click()
 
     def _refresh_devices(self):
         """刷新可用音频设备列表"""
@@ -477,6 +529,44 @@ class MainWindow:
         minutes = seconds // 60
         secs = seconds % 60
         self.duration_label.configure(text=f"{minutes:02d}:{secs:02d}")
+
+    def update_volume(self, volume: float):
+        """
+        更新音量指示器
+
+        Args:
+            volume: 归一化音量 0.0-1.0
+        """
+        self.volume_bar.set(volume)
+
+    def set_recording_indicator(self, is_recording: bool):
+        """
+        设置录音状态指示器
+
+        Args:
+            is_recording: 是否正在录音
+        """
+        if is_recording:
+            self._is_recording_flashing = True
+            self._flash_recording_indicator()
+        else:
+            self._is_recording_flashing = False
+            self.recording_indicator.configure(text_color="gray50")
+
+    def _flash_recording_indicator(self):
+        """闪烁录音指示灯（脉冲效果）"""
+        if not self._is_recording_flashing:
+            return
+
+        # 切换颜色
+        current_color = self.recording_indicator.cget("text_color")
+        if current_color == "red" or current_color == "#ff0000":
+            self.recording_indicator.configure(text_color="#ff6666")
+        else:
+            self.recording_indicator.configure(text_color="red")
+
+        # 500ms 后再次切换
+        self.root.after(500, self._flash_recording_indicator)
 
     def get_selected_style(self) -> str:
         """获取当前选中的格式化风格
