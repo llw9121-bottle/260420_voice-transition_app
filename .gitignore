@@ -66,3 +66,11 @@ Desktop.ini
 
 # User local preferences (theme, etc.)
 .user_config.json
+
+# PyInstaller build artifacts
+*.app
+*.exe
+*.zip
+
+# Log files
+*.log
