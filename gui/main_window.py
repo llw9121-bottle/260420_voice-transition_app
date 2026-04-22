@@ -201,11 +201,19 @@ class MainWindow:
         self.content_frame.grid_columnconfigure(0, weight=3)
         self.content_frame.grid_columnconfigure(1, weight=1)
         self.content_frame.grid_rowconfigure(0, weight=1)
-        
+
         # 左侧转录文本区
         self._create_transcription_area()
-        
-        # 右侧设置面板
+
+        # 右侧设置面板 - 使用可滚动框架容纳所有选项
+        self.settings_scroll_frame = ctk.CTkScrollableFrame(
+            self.content_frame,
+            label_text="设置选项",
+            label_font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+        )
+        self.settings_scroll_frame.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="nsew")
+
+        # 在可滚动框架内创建设置内容
         self._create_settings_panel()
         
     def _create_transcription_area(self):
@@ -321,9 +329,10 @@ class MainWindow:
         self.search_entry.bind("<KeyRelease>", self._on_search_key)
         
     def _create_settings_panel(self):
-        """创建设置面板"""
-        self.settings_frame = ctk.CTkFrame(self.content_frame)
-        self.settings_frame.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="nsew")
+        """创建设置面板（放在可滚动框架内）"""
+        # settings_frame 放在可滚动框架内部
+        self.settings_frame = ctk.CTkFrame(self.settings_scroll_frame, fg_color="transparent")
+        self.settings_frame.pack(fill="both", expand=True)
 
         # 1. 格式化风格选择（最常用，放上方）
         self.style_label = ctk.CTkLabel(
