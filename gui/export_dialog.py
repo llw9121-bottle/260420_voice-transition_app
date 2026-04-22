@@ -2,14 +2,17 @@
 文档导出对话框
 
 提供导出文档的配置界面，包括选择格式、文件名、保存路径等。
+记住用户上次选择的输出目录，下次导出默认使用。
 """
 
+import json
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 from typing import Optional, Callable
 from datetime import datetime
 
+from loguru import logger
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.naming import NamingStrategy
 
@@ -21,6 +24,9 @@ class ExportDialog:
     配置导出选项并执行导出。
     """
     
+    # 配置文件路径（存储上次导出路径）
+    CONFIG_FILE = Path(__file__).parent.parent / ".export_config.json"
+
     def __init__(
         self,
         parent: ctk.CTk,
@@ -29,7 +35,7 @@ class ExportDialog:
     ):
         """
         初始化导出对话框
-        
+
         Args:
             parent: 父窗口
             document: 要导出的文档
@@ -38,23 +44,24 @@ class ExportDialog:
         self.parent = parent
         self.document = document
         self.on_export = on_export
-        
+
         # 创建对话框
         self.window = ctk.CTkToplevel(parent)
         self.window.title("导出文档")
         self.window.geometry("600x550")
         self.window.minsize(550, 450)
-        
+
         # 模态对话框
         self.window.transient(parent)
         self.window.grab_set()
-        
+
         # 导出配置
         self.export_format = ctk.StringVar(value="markdown")
         self.filename_template = ctk.StringVar(value="timestamp_title")
         self.custom_filename = ctk.StringVar()
-        self.output_dir = ctk.StringVar(value="./output")
-        
+        # 加载上次保存的输出目录
+        self.output_dir = ctk.StringVar(value=self._load_last_output_dir())
+
         # 创建界面
         self._create_ui()
         
@@ -265,6 +272,48 @@ class ExportDialog:
         
     # ===== 事件处理方法 =====
     
+    def _load_last_output_dir(self) -> str:
+        """
+        加载上次保存的输出目录
+
+        Returns:
+            保存的目录，如果没有则返回默认
+        """
+        default_dir = "./output"
+
+        if not self.CONFIG_FILE.exists():
+            return default_dir
+
+        try:
+            with open(self.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            last_dir = data.get("last_output_dir")
+            if last_dir and Path(last_dir).exists():
+                logger.debug(f"加载上次输出目录: {last_dir}")
+                return last_dir
+            else:
+                return default_dir
+        except Exception as e:
+            logger.warning(f"加载上次输出目录失败，使用默认: {e}")
+            return default_dir
+
+    def _save_last_output_dir(self, directory: str) -> None:
+        """
+        保存当前输出目录到配置文件
+
+        Args:
+            directory: 要保存的目录路径
+        """
+        try:
+            data = {
+                "last_output_dir": directory
+            }
+            with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.debug(f"保存当前输出目录: {directory}")
+        except Exception as e:
+            logger.warning(f"保存输出目录配置失败: {e}")
+
     def _on_browse(self):
         """浏览按钮点击"""
         directory = filedialog.askdirectory(
@@ -315,6 +364,9 @@ class ExportDialog:
                 "导出成功",
                 f"文档已导出到:\n{final_path}"
             )
+
+            # 记住这次的输出目录，下次默认使用
+            self._save_last_output_dir(self.output_dir.get())
 
             # 关闭对话框
             self.window.destroy()

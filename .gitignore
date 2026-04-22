@@ -60,3 +60,6 @@ test_output/
 # Windows
 Thumbs.db
 Desktop.ini
+
+# User local export config
+.export_config.json
