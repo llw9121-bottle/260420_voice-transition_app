@@ -264,7 +264,9 @@ class VoiceTranscriptionApp:
         if style == "cleaned":
             formatter = CleanedStyle()
         elif style == "paragraphs":
-            formatter = ParagraphStyle()
+            # 获取LLM分段选项
+            enable_llm = self.main_window.get_enable_llm_paragraphs()
+            formatter = ParagraphStyle(enable_llm_reorganization=enable_llm)
         elif style == "behavior_match":
             if self.behavior_config and self.behavior_config.behaviors:
                 # 已有配置，直接使用
@@ -294,9 +296,13 @@ class VoiceTranscriptionApp:
             formatter = RawStyle()
 
         # 对于 behavior_match 模式，需要调用 LLM 处理，可能耗时较长
-        # 显示处理中提示弹窗
+        # 如果 paragraphs 启用了 LLM 分段，也需要调用 LLM，显示处理提示
         processing_window = None
-        if style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors:
+        need_llm_processing = (
+            (style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors) or
+            (style == "paragraphs" and self.main_window.get_enable_llm_paragraphs())
+        )
+        if need_llm_processing:
             processing_window = self._show_processing_window()
 
         try:
@@ -365,12 +371,12 @@ class VoiceTranscriptionApp:
         self.main_window.update_status(f"关键行为配置已保存: {len(config.behaviors)} 个行为")
 
     def _show_processing_window(self):
-        """显示处理中提示窗口（behavior match 需要调用 LLM，耗时较长）"""
+        """显示处理中提示窗口（需要调用 LLM 处理，耗时较长）"""
         import customtkinter as ctk
         # 创建顶级窗口
         window = ctk.CTkToplevel(self.main_window.root)
         window.title("处理中")
-        window.geometry("350x120")
+        window.geometry("380x120")
         window.resizable(False, False)
 
         # 模态显示
@@ -380,7 +386,7 @@ class VoiceTranscriptionApp:
         # 提示文本
         label = ctk.CTkLabel(
             window,
-            text="正在进行行为匹配分析...\n需要调用大语言模型处理，请稍候...",
+            text="正在调用大语言模型处理文本...\n这需要几秒钟到一分钟，请稍候...",
             font=ctk.CTkFont(size=14),
             justify="center"
         )

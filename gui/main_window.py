@@ -180,6 +180,17 @@ class MainWindow:
         )
         self.style_menu.pack(fill="x", padx=10, pady=5)
 
+        # 段落选项：LLM语义分段（仅paragraphs模式可用
+        self.llm_para_var = ctk.BooleanVar(value=False)
+        self.llm_para_check = ctk.CTkCheckBox(
+            self.settings_frame,
+            text="启用 LLM 语义分段（仅段落模式，消耗Token）",
+            variable=self.llm_para_var,
+            onvalue=True,
+            offvalue=False
+        )
+        self.llm_para_check.pack(anchor="w", padx=10, pady=(0, 5))
+
         # 分隔线
         self.separator1 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
         self.separator1.pack(fill="x", padx=10, pady=10)
@@ -490,6 +501,14 @@ class MainWindow:
             True 表示保存，False 表示不保存
         """
         return self.save_audio_var.get()
+
+    def get_enable_llm_paragraphs(self) -> bool:
+        """获取是否启用LLM语义分段选项
+
+        Returns:
+            True 表示启用，False 表示不启用
+        """
+        return self.llm_para_var.get()
 
     def run(self):
         """运行主循环"""

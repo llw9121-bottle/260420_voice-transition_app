@@ -69,38 +69,74 @@ class CleanedStyle(StyleFormatter):
 class ParagraphStyle(StyleFormatter):
     """
     段落结构风格
-    
+
     按时间戳停顿分割成段落，适合长文本阅读。
+    可选启用LLM语义分段，获得更符合语义的段落结构。
     """
-    
+
     def __init__(
         self,
         min_sentences: int = 2,
-        pause_threshold: float = 2.0
+        pause_threshold: float = 2.0,
+        enable_llm_reorganization: bool = False
     ):
+        """
+        初始化段落风格
+
+        Args:
+            min_sentences: 每个段落最少句子数
+            pause_threshold: 停顿阈值（秒），超过此间隔开启新段落
+            enable_llm_reorganization: 是否启用LLM语义分段，
+                启用后使用百炼大模型按语义重新整理段落，结果更自然但消耗Token
+        """
         self.min_sentences = min_sentences
         self.pause_threshold = pause_threshold
-    
+        self.enable_llm_reorganization = enable_llm_reorganization
+
     @property
     def style(self) -> FormattingStyle:
         return FormattingStyle.PARAGRAPHS
-    
+
     def format(self, document: FormattedDocument, **kwargs) -> FormattedDocument:
-        """段落风格：按停顿分割成段落"""
+        """段落风格：按停顿分割成段落，可选LLM语义整理"""
+        # 读取选项，允许kwargs覆盖
+        enable_llm = kwargs.get(
+            "enable_llm_reorganization",
+            self.enable_llm_reorganization
+        )
+
         # 先清洗文本
         cleaner = TextCleaner()
         cleaned_text = cleaner.clean(document.raw_text)
-        
-        # 分割成段落
-        paragraphs = split_into_paragraphs(
-            cleaned_text,
-            min_sentences=self.min_sentences,
-            pause_threshold=self.pause_threshold,
-            segments=document.segments if document.segments else None
-        )
-        
-        # 用空行连接段落
-        document.formatted_text = '\n\n'.join(paragraphs)
+
+        # 处理流程
+        if enable_llm and cleaned_text.strip():
+            from api.bailian_llm import reorganize_paragraphs
+            try:
+                logger.info("开始LLM语义段落整理...")
+                processed_text = reorganize_paragraphs(cleaned_text)
+                logger.info("LLM段落整理完成")
+                document.formatted_text = processed_text
+            except Exception as e:
+                logger.warning(f"LLM段落整理失败，回退到基于时间戳分割: {e}")
+                # 回退到原始基于时间戳的方法
+                paragraphs = split_into_paragraphs(
+                    cleaned_text,
+                    min_sentences=self.min_sentences,
+                    pause_threshold=self.pause_threshold,
+                    segments=document.segments if document.segments else None
+                )
+                document.formatted_text = '\n\n'.join(paragraphs)
+        else:
+            # 原始方法：基于时间戳分割
+            paragraphs = split_into_paragraphs(
+                cleaned_text,
+                min_sentences=self.min_sentences,
+                pause_threshold=self.pause_threshold,
+                segments=document.segments if document.segments else None
+            )
+            document.formatted_text = '\n\n'.join(paragraphs)
+
         document.style = self.style
         document.word_count = len(document.formatted_text)
 
