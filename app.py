@@ -13,9 +13,17 @@ from typing import Optional
 import customtkinter as ctk
 from loguru import logger
 
-# 添加项目根目录到 Python 路径
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+# 计算项目根目录
+# PyInstaller 打包后，需要从可执行文件位置推算项目根目录
+if getattr(sys, 'frozen', False):
+    # 打包运行：可执行文件在 dist/AppName/AppName.exe
+    # 项目根目录就是可执行文件所在目录
+    app_dir = Path(sys.executable).parent
+    project_root = app_dir
+else:
+    # 源码运行：从当前文件位置推算
+    project_root = Path(__file__).parent
+    sys.path.insert(0, str(project_root))
 
 from config.settings import settings
 from gui.main_window import MainWindow

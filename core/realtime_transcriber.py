@@ -25,9 +25,10 @@ if sys.stdout is not None and hasattr(sys.stdout, 'buffer'):
 if sys.stderr is not None and hasattr(sys.stderr, 'buffer'):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-# 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+# 添加项目根目录到Python路径（仅源码运行需要）
+if not getattr(sys, 'frozen', False):
+    project_root = Path(__file__).parent.parent
+    sys.path.insert(0, str(project_root))
 
 from core.audio_recorder import AudioRecorder, AudioConfig
 from api.dashscope_asr import DashScopeASRClient, ASRConfig, ASRResult

@@ -10,7 +10,9 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('.env.example', '.'),
+    ],
     hiddenimports=[
         'pyaudio',
         'customtkinter',

@@ -6,6 +6,7 @@
 """
 
 import json
+import sys
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pathlib import Path
@@ -16,16 +17,19 @@ from loguru import logger
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.naming import NamingStrategy
 
+# 获取正确的项目根目录（支持PyInstaller打包）
+from config.settings import project_root
+
 
 class ExportDialog:
     """
     文档导出对话框
-    
+
     配置导出选项并执行导出。
     """
-    
+
     # 配置文件路径（存储上次导出路径）
-    CONFIG_FILE = Path(__file__).parent.parent / ".export_config.json"
+    CONFIG_FILE = project_root / ".export_config.json"
 
     def __init__(
         self,

@@ -14,15 +14,24 @@ from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+# 计算项目根目录
+# PyInstaller 打包后，需要从可执行文件位置推算项目根目录
+if getattr(sys, 'frozen', False):
+    # 打包运行：可执行文件在 dist/AppName/AppName.exe
+    # 项目根目录就是可执行文件所在目录
+    app_dir = Path(sys.executable).parent
+    project_root = app_dir
+else:
+    # 源码运行：从当前文件位置推算
+    project_root = Path(__file__).parent.parent
+    sys.path.insert(0, str(project_root))
 
 from utils.logger import logger
 
-# 加载.env文件
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path, encoding="utf-8")
+# 加载.env文件：始终从项目根目录读取
+env_path = project_root / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path, encoding="utf-8")
 
 
 class APISettings(BaseSettings):
@@ -215,8 +224,8 @@ def save_api_configuration(dashscope_api_key: str, bailian_api_key: str = "") ->
         是否保存成功
     """
     try:
-        env_path = Path(__file__).parent.parent / ".env"
-        env_example_path = Path(__file__).parent.parent / ".env.example"
+        env_path = project_root / ".env"
+        env_example_path = project_root / ".env.example"
 
         # 如果.env不存在，从.example复制模板
         if not env_path.exists() and env_example_path.exists():

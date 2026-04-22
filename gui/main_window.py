@@ -10,7 +10,7 @@ import customtkinter as ctk
 from pathlib import Path
 from typing import Optional, Callable
 
-from config.settings import settings
+from config.settings import settings, project_root
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.behavior_matcher import BehaviorConfig
 from utils.logger import logger
@@ -33,7 +33,7 @@ class MainWindow:
     def __init__(self):
         """初始化主窗口"""
         # 配置文件路径（存储用户偏好）
-        self.USER_CONFIG_FILE = Path(__file__).parent.parent / ".user_config.json"
+        self.USER_CONFIG_FILE = project_root / ".user_config.json"
 
         # 加载保存的用户偏好设置
         saved_config = self._load_user_config()
