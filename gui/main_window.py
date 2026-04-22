@@ -12,6 +12,7 @@ from typing import Optional, Callable
 
 from config.settings import settings
 from core.formatter.base import FormattedDocument, FormattingStyle
+from core.formatter.behavior_matcher import BehaviorConfig
 from utils.logger import logger
 
 # 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
