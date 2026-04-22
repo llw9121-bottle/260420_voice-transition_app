@@ -31,6 +31,7 @@ ENV/
 # Environment variables (contains API keys)
 .env
 .env.*
+!.env.example
 
 # Project output
 output/

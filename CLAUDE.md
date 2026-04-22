@@ -179,3 +179,39 @@ OUTPUT_DIR=./output
 - 应用输出: `./output/`
 - 日志文件: `./logs/`
 - 测试输出: `./test_output/`
+
+### 测试
+
+项目采用双层测试结构：
+
+```
+tests/
+├── __init__.py
+├── conftest.py              # pytest 配置
+├── test_config.py           # 配置模块单元测试
+├── test_audio_device.py     # 音频设备检测单元测试
+├── test_formatter.py        # 格式化模块单元测试
+└── e2e/                     # 端到端功能测试
+    ├── test_realtime_asr.py       # 实时转录测试（需要 API Key）
+    ├── test_behavior_matcher_llm.py  # 行为匹配测试（需要 API Key）
+    ├── test_export.py             # 完整导出测试
+    └── ...
+```
+
+**运行测试：**
+```bash
+# 运行所有单元测试（无需 API Key，可离线运行）
+pytest tests/ -v -m "not requires_api"
+
+# 运行所有测试（包括需要 API Key 的端到端测试）
+pytest tests/ -v
+
+# 运行单个测试文件
+pytest tests/test_config.py -v
+```
+
+**测试原则：**
+- 单元测试：不依赖外部服务和 API Key，可离线运行
+- 端到端测试：验证完整功能流程，需要有效 API Key
+- 遵循 3A 结构：Arrange、Act、Assert
+- 依赖必须隔离，禁止单元测试触碰真实 API
