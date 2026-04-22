@@ -3,12 +3,17 @@
 
 提供弹窗式表格界面，用于配置 4-7 个关键行为条目。
 支持添加、删除、编辑行为定义。
+支持导入/导出配置，提供常用场景预置模板。
 """
 
+import json
 import re
 import customtkinter as ctk
 from tkinter import messagebox
+from tkinter import filedialog
 from typing import List, Optional, Callable
+
+from loguru import logger
 
 from core.formatter.behavior_matcher import BehaviorDefinition, BehaviorConfig
 
@@ -23,7 +28,72 @@ class BehaviorConfigDialog:
     # 最小和最大行为数量
     MIN_BEHAVIORS = 4
     MAX_BEHAVIORS = 7
-    
+
+    # 预置模板 - 常用场景
+    BUILTIN_TEMPLATES = [
+        {
+            "name": "会议行为分析",
+            "description": "识别会议讨论中的各类行为和决策",
+            "config": {
+                "behaviors": [
+                    {"name": "提出需求", "description": "提出新的功能需求或需求变更", "examples": ["我们需要增加一个功能", "这个需求要改一下"]},
+                    {"name": "反馈问题", "description": "反馈使用中遇到的问题或Bug", "examples": ["这里有个问题", "运行报错了"]},
+                    {"name": "确认事项", "description": "确认需求范围、验收标准或时间节点", "examples": ["就按这个方案来", "这个截止日期没问题"]},
+                    {"name": "做出决策", "description": "对讨论事项做出最终决定", "examples": ["我们决定采用这个方案", "就这么定了"]},
+                    {"name": "识别风险", "description": "指出潜在的风险和问题", "examples": ["这里有个风险", "可能会出问题"]},
+                    {"name": "安排计划", "description": "安排下一步工作和分工", "examples": ["你来负责这部分", "下周一开始做"]},
+                ],
+                "enable_paragraph_reorganization": True,
+                "auto_chunk_long_text": True
+            }
+        },
+        {
+            "name": "求职面试分析",
+            "description": "识别面试中的自我介绍和项目经验描述",
+            "config": {
+                "behaviors": [
+                    {"name": "项目经验", "description": "描述参与过的项目和职责", "examples": ["我在XX项目负责开发", "这个项目是我主导的"]},
+                    {"name": "技能自评", "description": "评价自己的技术能力和掌握程度", "examples": ["我熟练掌握Python", "对云原生比较熟悉"]},
+                    {"name": "求职意向", "description": "说明期望的职位和薪资待遇", "examples": ["我期望找Python后端开发", "薪资预期在这个范围"]},
+                    {"name": "离职原因", "description": "解释为什么换工作", "examples": ["想寻求更大挑战", "公司业务调整"]},
+                    {"name": "提问环节", "description": "面试官或候选人提问", "examples": ["请问这个岗位加班多吗", "你有什么问题要问我"]},
+                ],
+                "enable_paragraph_reorganization": True,
+                "auto_chunk_long_text": True
+            }
+        },
+        {
+            "name": "心理咨询记录",
+            "description": "识别咨询中的情绪表达和问题描述",
+            "config": {
+                "behaviors": [
+                    {"name": "情绪表达", "description": "表达自己的情绪和感受", "examples": ["我最近感到很焦虑", "压力很大睡不好"]},
+                    {"name": "问题描述", "description": "描述遇到的问题和困扰", "examples": ["我和同事关系不好", "这件事一直困扰我"]},
+                    {"name": "改变意愿", "description": "表达想要改变的想法", "examples": ["我想调整一下状态", "希望能有所改善"]},
+                    {"name": "成长感悟", "description": "分享自己的感悟和收获", "examples": ["通过这段咨询我明白了", "感觉自己成长了很多"]},
+                    {"name": "咨询师反馈", "description": "咨询师给出的建议和反馈", "examples": ["你可以试着这样做", "我建议你慢慢来"]},
+                ],
+                "enable_paragraph_reorganization": True,
+                "auto_chunk_long_text": True
+            }
+        },
+        {
+            "name": "产品需求沟通",
+            "description": "识别需求沟通中的各类行为",
+            "config": {
+                "behaviors": [
+                    {"name": "用户痛点", "description": "描述用户遇到的问题和痛点", "examples": ["用户反馈这个操作太麻烦", "用户经常在这里出错"]},
+                    {"name": "功能建议", "description": "提出功能改进建议", "examples": ["我们可以加一个快捷键", "这里应该增加搜索功能"]},
+                    {"name": "优先级排序", "description": "对需求进行优先级排序", "examples": ["这个是高优先级", "先做核心功能"]},
+                    {"name": "用户故事", "description": "描述用户使用场景", "examples": ["当用户想要搜索的时候", "用户在移动端使用时"]},
+                    {"name": "验收标准", "description": "定义需求验收标准", "examples": ["这个需求要满足这些条件", "验收通过的标准是"]},
+                ],
+                "enable_paragraph_reorganization": True,
+                "auto_chunk_long_text": True
+            }
+        }
+    ]
+
     def __init__(self, parent: ctk.CTk, on_save: Optional[Callable[[BehaviorConfig], None]] = None,
                  initial_config: Optional[BehaviorConfig] = None):
         """
@@ -46,8 +116,8 @@ class BehaviorConfigDialog:
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
         self.window.title("配置关键行为")
-        self.window.geometry("800x650")
-        self.window.minsize(700, 550)
+        self.window.geometry("850x680")
+        self.window.minsize(750, 600)
 
         # 模态对话框
         self.window.transient(parent)
@@ -264,16 +334,51 @@ class BehaviorConfigDialog:
         """创建底部按钮栏"""
         btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         btn_frame.pack(fill="x", pady=10)
-        
-        # 左侧：添加按钮
+
+        # 最左侧：模板、导入、导出按钮
+        self.template_btn = ctk.CTkButton(
+            btn_frame,
+            text="📋 模板",
+            command=self._open_template_dialog,
+            width=70,
+            height=32,
+            fg_color="#008888",
+            hover_color="#006666"
+        )
+        self.template_btn.pack(side="left", padx=3)
+
+        self.import_btn = ctk.CTkButton(
+            btn_frame,
+            text="📥 导入",
+            command=self._on_import,
+            width=70,
+            height=32,
+            fg_color="#555588",
+            hover_color="#333366"
+        )
+        self.import_btn.pack(side="left", padx=3)
+
+        self.export_btn = ctk.CTkButton(
+            btn_frame,
+            text="📤 导出",
+            command=self._on_export,
+            width=70,
+            height=32,
+            fg_color="#555588",
+            hover_color="#333366"
+        )
+        self.export_btn.pack(side="left", padx=(3, 20))
+
+        # 左中：添加按钮
         self.add_btn = ctk.CTkButton(
             btn_frame,
             text="+ 添加行为",
             command=self._add_behavior,
-            width=120
+            width=100,
+            height=32
         )
-        self.add_btn.pack(side="left", padx=5)
-        
+        self.add_btn.pack(side="left", padx=3)
+
         # 中间：数量提示
         self.count_label = ctk.CTkLabel(
             btn_frame,
@@ -281,25 +386,27 @@ class BehaviorConfigDialog:
             font=ctk.CTkFont(size=11)
         )
         self.count_label.pack(side="left", padx=20)
-        
+
         # 右侧：取消和保存按钮
         self.cancel_btn = ctk.CTkButton(
             btn_frame,
             text="取消",
             command=self._on_cancel,
-            width=100,
+            width=80,
+            height=32,
             fg_color="gray",
             hover_color="darkgray"
         )
-        self.cancel_btn.pack(side="right", padx=5)
-        
+        self.cancel_btn.pack(side="right", padx=3)
+
         self.save_btn = ctk.CTkButton(
             btn_frame,
             text="保存配置",
             command=self._on_save,
-            width=120
+            width=100,
+            height=32
         )
-        self.save_btn.pack(side="right", padx=5)
+        self.save_btn.pack(side="right", padx=3)
         
     # ===== 事件处理方法 =====
     
@@ -451,6 +558,201 @@ class BehaviorConfigDialog:
 
         # 关闭对话框
         self.window.destroy()
+
+    # ===== 模板、导入、导出功能 =====
+
+    def _open_template_dialog(self):
+        """打开模板选择对话框"""
+        dialog = ctk.CTkToplevel(self.window)
+        dialog.title("选择预置模板")
+        dialog.geometry("400x350")
+        dialog.minsize(350, 300)
+        dialog.transient(self.window)
+        dialog.grab_set()
+
+        # 标题
+        title_label = ctk.CTkLabel(
+            dialog,
+            text="选择预置模板",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(padx=20, pady=(15, 5))
+
+        desc_label = ctk.CTkLabel(
+            dialog,
+            text="选择一个预置模板快速开始，可编辑修改后保存",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        desc_label.pack(padx=20, pady=(0, 10))
+
+        # 模板列表框架
+        list_frame = ctk.CTkScrollableFrame(dialog)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        def load_template(template_data):
+            """加载选中的模板"""
+            # 确认会覆盖当前配置
+            if self.behaviors and any(b.name != "前瞻思考" for b in self.behaviors):
+                if not messagebox.askyesno(
+                    "确认加载模板",
+                    "加载模板会覆盖当前所有配置。是否继续？"
+                ):
+                    return
+
+            # 从模板数据创建配置
+            template_config = template_data["config"]
+            behaviors = []
+            for b in template_config.get("behaviors", []):
+                behaviors.append(BehaviorDefinition(
+                    name=b["name"],
+                    description=b["description"],
+                    examples=b.get("examples", [])
+                ))
+
+            self.behaviors = behaviors
+            # 更新高级选项
+            self.enable_paragraph_reorganization.set(
+                template_config.get("enable_paragraph_reorganization", True)
+            )
+            self.auto_chunk_long_text.set(
+                template_config.get("auto_chunk_long_text", True)
+            )
+
+            # 刷新界面
+            self._refresh_behavior_rows()
+            self._update_count_label()
+
+            # 关闭模板对话框
+            dialog.destroy()
+
+            logger.info(f"已加载预置模板: {template_data['name']}")
+
+        # 创建模板按钮列表
+        for template in self.BUILTIN_TEMPLATES:
+            btn_frame = ctk.CTkFrame(list_frame)
+            btn_frame.pack(fill="x", pady=5)
+
+            btn = ctk.CTkButton(
+                btn_frame,
+                text=f"{template['name']}\n{template['description']}",
+                command=lambda t=template: load_template(t),
+                height=50
+            )
+            btn.pack(fill="x", padx=5, pady=5)
+
+    def _on_import(self):
+        """导入配置从 JSON 文件"""
+        file_path = filedialog.askopenfilename(
+            title="导入行为配置",
+            filetypes=[("JSON配置文件", "*.json"), ("所有文件", "*.*")],
+            initialdir="."
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # 验证并创建配置
+            config = BehaviorConfig.from_dict(data)
+            is_valid, msg = config.validate()
+            if not is_valid:
+                messagebox.showerror("导入失败", f"配置无效: {msg}")
+                return
+
+            # 确认覆盖
+            if self.behaviors and any(b.name != "前瞻思考" for b in self.behaviors):
+                if not messagebox.askyesno(
+                    "确认导入",
+                    f"导入会覆盖当前所有配置，共 {len(config.behaviors)} 个行为。是否继续？"
+                ):
+                    return
+
+            # 加载导入的配置
+            self.behaviors = list(config.behaviors)
+            self.enable_paragraph_reorganization.set(config.enable_paragraph_reorganization)
+            self.auto_chunk_long_text.set(config.auto_chunk_long_text)
+
+            # 刷新界面
+            self._refresh_behavior_rows()
+            self._update_count_label()
+
+            messagebox.showinfo(
+                "导入成功",
+                f"成功导入 {len(self.behaviors)} 个行为配置。\n文件: {file_path}"
+            )
+            logger.info(f"行为配置导入成功: {file_path}, {len(self.behaviors)} 个行为")
+
+        except json.JSONDecodeError as e:
+            messagebox.showerror("导入失败", f"JSON 格式错误: {e}")
+            logger.error(f"导入配置失败 - JSON格式错误: {e}")
+        except Exception as e:
+            messagebox.showerror("导入失败", f"发生错误: {e}")
+            logger.error(f"导入配置失败: {e}")
+
+    def _on_export(self):
+        """导出当前配置到 JSON 文件"""
+        # 收集当前配置
+        current_behaviors = []
+        has_empty = False
+        for widgets in self.row_widgets:
+            name = widgets['name'].get().strip()
+            description = widgets['desc'].get().strip()
+            examples_text = widgets['examples'].get().strip()
+            examples = [ex.strip() for ex in re.split(r'[;；]', examples_text) if ex.strip()]
+            current_behaviors.append({
+                "name": name,
+                "description": description,
+                "examples": examples
+            })
+            if not name or not description:
+                has_empty = True
+
+        # 检查空内容提醒
+        if has_empty:
+            if not messagebox.askyesno(
+                "存在空条目",
+                "检测到行为名称或描述为空，是否仍然导出？"
+            ):
+                return
+
+        # 弹出保存文件对话框
+        file_path = filedialog.asksaveasfilename(
+            title="导出行为配置",
+            defaultextension=".json",
+            filetypes=[("JSON配置文件", "*.json"), ("所有文件", "*.*")],
+            initialfile="behavior_config.json",
+            initialdir="."
+        )
+        if not file_path:
+            return
+
+        try:
+            # 创建配置数据
+            export_data = {
+                "behaviors": current_behaviors,
+                "enable_paragraph_reorganization": self.enable_paragraph_reorganization.get(),
+                "auto_chunk_long_text": self.auto_chunk_long_text.get(),
+                "min_confidence": 0.6,
+                "include_context": True,
+                "context_chars": 30
+            }
+
+            # 写入文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+
+            messagebox.showinfo(
+                "导出成功",
+                f"成功导出 {len(current_behaviors)} 个行为配置。\n文件: {file_path}"
+            )
+            logger.info(f"行为配置导出成功: {file_path}, {len(current_behaviors)} 个行为")
+
+        except Exception as e:
+            messagebox.showerror("导出失败", f"发生错误: {e}")
+            logger.error(f"导出配置失败: {e}")
 
 
 # 测试代码

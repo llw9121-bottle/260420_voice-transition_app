@@ -164,7 +164,30 @@ class VoiceTranscriptionApp:
             self._start_auto_save()
         except Exception as e:
             logger.error(f"启动实时转录失败: {e}")
-            threading.Thread(target=self._mock_recording, daemon=True).start()
+            # 弹出错误提示给用户
+            import tkinter.messagebox as messagebox
+            error_msg = str(e)
+            if "websocket connection could not established" in error_msg or "timeout" in error_msg.lower():
+                messagebox.showerror(
+                    "连接失败",
+                    f"无法连接到阿里云 DashScope 服务（连接超时）。\n\n"
+                    f"错误信息: {error_msg}\n\n"
+                    f"可能原因：\n"
+                    f"1. 网络无法访问阿里云，请检查网络连接\n"
+                    f"2. 防火墙阻止了 WebSocket 连接\n"
+                    f"3. API Key 无效或过期，请检查 .env 配置\n"
+                    f"4. 阿里云服务暂时不可用，请稍后重试"
+                )
+            else:
+                messagebox.showerror(
+                    "启动失败",
+                    f"启动实时转录失败。\n\n"
+                    f"错误信息: {error_msg}\n\n"
+                    f"请检查日志获取更多详细信息。"
+                )
+            # 重置UI状态
+            self.main_window._on_stop_click()
+            self.is_recording = False
 
     def _update_duration(self):
         """更新录音时长显示（定时器回调）"""
