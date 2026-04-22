@@ -107,14 +107,27 @@ class MainWindow:
         self.control_frame = ctk.CTkFrame(self.main_frame)
         self.control_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
         
-        # 标题
+        # 标题区域（标题+提示）
+        title_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
+        title_frame.pack(side="left", padx=10, pady=10)
+
+        # 主标题
         self.title_label = ctk.CTkLabel(
-            self.control_frame,
+            title_frame,
             text="语音实时转录系统",
             font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
         )
-        self.title_label.pack(side="left", padx=10, pady=10)
-        
+        self.title_label.pack(side="top", anchor="w")
+
+        # 帮助提示
+        self.help_hint_label = ctk.CTkLabel(
+            title_frame,
+            text="点击「❓ 帮助」查看使用说明 | 快捷键: 空格=开始/暂停, Esc=停止",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10),
+            text_color="gray"
+        )
+        self.help_hint_label.pack(side="top", anchor="w")
+
         # 按钮框架
         self.button_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
         self.button_frame.pack(side="right", padx=10, pady=10)
@@ -168,6 +181,18 @@ class MainWindow:
             hover_color="#224477"
         )
         self.export_btn.pack(side="left", padx=4)
+
+        # 帮助按钮 - 灰色
+        self.help_btn = ctk.CTkButton(
+            self.button_frame,
+            text="❓ 帮助",
+            command=self._show_help,
+            width=70,
+            height=36,
+            fg_color="#555555",
+            hover_color="#444444"
+        )
+        self.help_btn.pack(side="left", padx=4)
         
     def _create_content_area(self):
         """创建中间内容区"""
@@ -677,6 +702,8 @@ class MainWindow:
         self.root.bind('<Control-b>', self._on_ctrl_b_shortcut)
         # Command+B: 打开行为配置（macOS 习惯）
         self.root.bind('<Command-b>', self._on_ctrl_b_shortcut)
+        # F1: 打开帮助
+        self.root.bind('<F1>', self._on_f1_shortcut)
 
     def _on_space_shortcut(self, event):
         """空格键快捷键处理"""
@@ -711,6 +738,10 @@ class MainWindow:
     def _on_ctrl_b_shortcut(self, event):
         """Ctrl+B快捷键处理 - 行为配置"""
         self._on_behavior_config_click()
+
+    def _on_f1_shortcut(self, event):
+        """F1快捷键处理 - 打开帮助"""
+        self._show_help()
 
     def _refresh_devices(self):
         """刷新可用音频设备列表"""
@@ -1150,6 +1181,109 @@ class MainWindow:
         # 保存配置
         self._save_user_config()
         logger.info(f"文本字体已调整: {size}pt")
+
+    def _show_help(self) -> None:
+        """显示使用帮助对话框"""
+        help_window = ctk.CTkToplevel(self.root)
+        help_window.title("使用帮助 - 语音实时转录系统")
+        help_window.geometry("750x600")
+        help_window.resizable(True, True)
+        help_window.transient(self.root)
+        help_window.grab_set()
+
+        # 帮助文本
+        help_text = """
+\033[1m快速开始\033[0m
+────────────────────────────────
+1. 选择识别语言：在右侧设置面板选择您需要识别的语言
+2. 选择音频设备：选择麦克风输入设备
+3. 选择格式化风格：
+   • 原始(raw)：不做任何处理，直接输出
+   • 清洗(cleaned)：去除语气词、重复
+   • 分段(paragraphs)：按停顿整理为自然段落
+   • 行为匹配(behavior_match)：LLM识别自定义关键行为
+4. 点击「▶ 开始录音」开始转录
+
+\033[1m快捷键\033[0m
+────────────────────────────────
+空格      → 智能切换：未开始→开始，录音中→暂停，暂停→恢复
+Esc       → 直接停止录音
+Ctrl+S    → 导出文档
+Ctrl+B    → 打开行为配置
+F3        → 搜索文本
+F5        → 刷新设备列表
+
+\033[1mVAD参数说明\033[0m
+────────────────────────────────
+VAD(语音活动检测)静音时长控制断句灵敏度：
+• 200-500ms  → 灵敏断句，适合对话、访谈场景
+• 500-1000ms → 平衡模式，适合一般场景
+• 1000-2000ms → 稳定断句，适合朗读、演讲场景
+
+\033[1m行为匹配功能\033[0m
+────────────────────────────────
+1. 点击「行为配置」按钮添加您要识别的行为
+2. 每个行为包含：名称 + 描述 + （可选）示例
+3. 应用支持4-7个自定义行为，内置多个场景模板
+4. 停止录音后，LLM会自动识别并原位标记匹配结果
+5. 文档末尾自动生成行为频率统计表格
+
+\033[1m常用提示\033[0m
+────────────────────────────────
+• 暂停录音：录音中点击「暂停」或按空格，可暂停后继续
+• 滚动锁定：勾选后文本不会自动滚动到底部，方便查看历史
+• 主题切换：在右侧设置可选择浅色/深色/跟随系统
+• 字体大小：可调整转录文本显示字体大小
+• 网络断开：应用会自动重连，不丢失已转录内容
+• 意外退出：重新启动会提示恢复未完成的录音
+
+\033[1m导出\033[0m
+────────────────────────────────
+支持三种格式：
+• Markdown (*.md) - 适合阅读和分享
+• Word (*.docx) - 适合正式文档
+• JSON (*.json) - 保留完整元数据用于二次处理
+
+项目主页与问题反馈：
+https://github.com/llw9121-bottle/voice-transition-app
+"""
+
+        # 创建文本框显示帮助
+        text_frame = ctk.CTkFrame(help_window)
+        text_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+        help_textbox = ctk.CTkTextbox(
+            text_frame,
+            wrap="word",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=14)
+        )
+        help_textbox.pack(padx=10, pady=10, fill="both", expand=True)
+
+        # 插入文本（去掉ANSI转义码用于显示）
+        import re
+        clean_help_text = re.sub(r'\033\[\d+m', '', help_text)
+        help_textbox.insert("0.0", clean_help_text.strip())
+        help_textbox.configure(state="disabled")
+
+        # 关闭按钮
+        close_btn = ctk.CTkButton(
+            help_window,
+            text="关闭",
+            command=help_window.destroy,
+            width=100,
+            height=36
+        )
+        close_btn.pack(pady=(0, 10))
+
+        # 居中窗口
+        help_window.update_idletasks()
+        width = help_window.width
+        height = help_window.height
+        x = (help_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (help_window.winfo_screenheight() // 2) - (height // 2)
+        help_window.geometry(f"+{x}+{y}")
+
+        logger.info("打开使用帮助")
 
 
 def main():
