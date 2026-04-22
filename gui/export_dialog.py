@@ -47,9 +47,9 @@ class ExportDialog:
 
         # 创建对话框
         self.window = ctk.CTkToplevel(parent)
-        self.window.title("导出文档")
-        self.window.geometry("600x550")
-        self.window.minsize(550, 450)
+        self.window.title("💾 导出文档")
+        self.window.geometry("620x620")
+        self.window.minsize(580, 550)
 
         # 模态对话框
         self.window.transient(parent)
@@ -77,10 +77,10 @@ class ExportDialog:
         # 标题
         self.title_label = ctk.CTkLabel(
             self.main_frame,
-            text="导出文档配置",
+            text="💾 导出文档配置",
             font=ctk.CTkFont(size=18, weight="bold")
         )
-        self.title_label.pack(anchor="w", pady=(0, 10))
+        self.title_label.pack(anchor="w", pady=(0, 15))
 
         # 文档信息
         self._create_info_section()
@@ -100,17 +100,17 @@ class ExportDialog:
     def _create_info_section(self):
         """创建文档信息区域"""
         info_frame = ctk.CTkFrame(self.main_frame)
-        info_frame.pack(fill="x", pady=5)
-        
+        info_frame.pack(fill="x", pady=(0, 8))
+
         # 文档标题
         title = self.document.title or "未命名文档"
         title_label = ctk.CTkLabel(
             info_frame,
-            text=f"文档: {title}",
+            text=f"📄 文档: {title}",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        title_label.pack(anchor="w", padx=10, pady=(5, 0))
-        
+        title_label.pack(anchor="w", padx=12, pady=(8, 2))
+
         # 统计信息
         stats_text = f"字数: {self.document.word_count} | 时长: {int(self.document.duration_seconds)}秒 | 风格: {self.document.style.value}"
         stats_label = ctk.CTkLabel(
@@ -119,27 +119,27 @@ class ExportDialog:
             font=ctk.CTkFont(size=10),
             text_color="gray"
         )
-        stats_label.pack(anchor="w", padx=10, pady=(0, 5))
-        
+        stats_label.pack(anchor="w", padx=12, pady=(2, 8))
+
     def _create_format_section(self):
         """创建导出格式选择区域"""
         format_frame = ctk.CTkFrame(self.main_frame)
-        format_frame.pack(fill="x", pady=5)
-        
+        format_frame.pack(fill="x", pady=(0, 8))
+
         label = ctk.CTkLabel(
             format_frame,
-            text="导出格式",
+            text="📄 导出格式",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        label.pack(anchor="w", padx=10, pady=(5, 5))
-        
+        label.pack(anchor="w", padx=12, pady=(8, 5))
+
         # 格式选项
         formats = [
-            ("markdown", "Markdown (.md) - 推荐，带格式和标记"),
+            ("markdown", "Markdown (.md) - 推荐，带格式和行为标记"),
             ("docx", "Word (.docx) - Microsoft Word 文档"),
-            ("json", "JSON (.json) - 结构化数据，完整信息"),
+            ("json", "JSON (.json) - 结构化数据，完整原始信息"),
         ]
-        
+
         for value, text in formats:
             radio = ctk.CTkRadioButton(
                 format_frame,
@@ -148,27 +148,27 @@ class ExportDialog:
                 value=value,
                 font=ctk.CTkFont(size=11)
             )
-            radio.pack(anchor="w", padx=20, pady=2)
-            
+            radio.pack(anchor="w", padx=24, pady=3)
+
     def _create_filename_section(self):
         """创建文件名设置区域"""
         filename_frame = ctk.CTkFrame(self.main_frame)
-        filename_frame.pack(fill="x", pady=5)
-        
+        filename_frame.pack(fill="x", pady=(0, 8))
+
         label = ctk.CTkLabel(
             filename_frame,
-            text="文件名设置",
+            text="📝 文件名设置",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        label.pack(anchor="w", padx=10, pady=(5, 5))
-        
+        label.pack(anchor="w", padx=12, pady=(8, 5))
+
         # 模板选择
         template_label = ctk.CTkLabel(
             filename_frame,
             text="命名模板:",
             font=ctk.CTkFont(size=11)
         )
-        template_label.pack(anchor="w", padx=10)
+        template_label.pack(anchor="w", padx=12)
         
         # 模板选项列表: (值, 显示文本)
         templates = [
@@ -217,58 +217,66 @@ class ExportDialog:
     def _create_output_section(self):
         """创建输出目录设置区域"""
         output_frame = ctk.CTkFrame(self.main_frame)
-        output_frame.pack(fill="x", pady=5)
-        
+        output_frame.pack(fill="x", pady=(0, 8))
+
         label = ctk.CTkLabel(
             output_frame,
-            text="输出目录",
+            text="📂 输出目录",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        label.pack(anchor="w", padx=10, pady=(5, 5))
-        
+        label.pack(anchor="w", padx=12, pady=(8, 5))
+
         # 目录选择框架
         dir_frame = ctk.CTkFrame(output_frame, fg_color="transparent")
-        dir_frame.pack(fill="x", padx=10, pady=5)
-        
+        dir_frame.pack(fill="x", padx=12, pady=(0, 8))
+
         self.dir_entry = ctk.CTkEntry(
             dir_frame,
             textvariable=self.output_dir,
-            font=ctk.CTkFont(size=11)
+            font=ctk.CTkFont(size=11),
+            height=32
         )
-        self.dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        
+        self.dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
         self.browse_btn = ctk.CTkButton(
             dir_frame,
-            text="浏览...",
+            text="🌏 浏览...",
             command=self._on_browse,
-            width=80
+            width=80,
+            height=32,
+            fg_color="#225599",
+            hover_color="#114477"
         )
         self.browse_btn.pack(side="right")
         
     def _create_button_bar(self):
         """创建底部按钮栏"""
         button_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(10, 0))
-        
-        # 取消按钮
+        button_frame.pack(fill="x", pady=(15, 5))
+
+        # 取消按钮（降低饱和度）
         self.cancel_btn = ctk.CTkButton(
             button_frame,
-            text="取消",
+            text="✖ 取消",
             command=self._on_cancel,
-            width=100,
-            fg_color="gray",
-            hover_color="darkgray"
+            width=90,
+            height=36,
+            fg_color="#666666",
+            hover_color="#444444"
         )
-        self.cancel_btn.pack(side="right", padx=5)
-        
-        # 导出按钮
+        self.cancel_btn.pack(side="right", padx=3)
+
+        # 导出按钮（降低饱和度）
         self.export_btn = ctk.CTkButton(
             button_frame,
-            text="导出",
+            text="💾 导出",
             command=self._on_export,
-            width=120
+            width=110,
+            height=36,
+            fg_color="#224488",
+            hover_color="#113366"
         )
-        self.export_btn.pack(side="right", padx=5)
+        self.export_btn.pack(side="right", padx=3)
         
     # ===== 事件处理方法 =====
     

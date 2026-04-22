@@ -63,3 +63,6 @@ Desktop.ini
 
 # User local export config
 .export_config.json
+
+# User local preferences (theme, etc.)
+.user_config.json

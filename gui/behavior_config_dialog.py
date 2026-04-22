@@ -115,9 +115,9 @@ class BehaviorConfigDialog:
 
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
-        self.window.title("配置关键行为")
-        self.window.geometry("850x680")
-        self.window.minsize(750, 600)
+        self.window.title("⚙ 配置关键行为")
+        self.window.geometry("980x680")
+        self.window.minsize(880, 600)
 
         # 模态对话框
         self.window.transient(parent)
@@ -233,29 +233,29 @@ class BehaviorConfigDialog:
         
     def _create_table_header(self):
         """创建表格表头"""
-        header_frame = ctk.CTkFrame(self.list_frame, fg_color="gray20", height=30)
-        header_frame.pack(fill="x", padx=5, pady=(5, 0))
+        header_frame = ctk.CTkFrame(self.list_frame, fg_color="gray25", height=32)
+        header_frame.pack(fill="x", padx=8, pady=(8, 2))
         header_frame.pack_propagate(False)
-        
+
         # 序号列
-        num_label = ctk.CTkLabel(header_frame, text="#", width=30)
-        num_label.pack(side="left", padx=5)
-        
+        num_label = ctk.CTkLabel(header_frame, text="#", width=30, font=ctk.CTkFont(weight="bold"))
+        num_label.pack(side="left", padx=6)
+
         # 名称列
-        name_label = ctk.CTkLabel(header_frame, text="行为名称", width=120)
-        name_label.pack(side="left", padx=5)
-        
+        name_label = ctk.CTkLabel(header_frame, text="行为名称", width=100, font=ctk.CTkFont(weight="bold"))
+        name_label.pack(side="left", padx=6)
+
         # 描述列
-        desc_label = ctk.CTkLabel(header_frame, text="描述", width=200)
-        desc_label.pack(side="left", padx=5, fill="x", expand=True)
-        
+        desc_label = ctk.CTkLabel(header_frame, text="行为描述", width=240, font=ctk.CTkFont(weight="bold"))
+        desc_label.pack(side="left", padx=6, fill="x", expand=True)
+
         # 示例列
-        examples_label = ctk.CTkLabel(header_frame, text="示例", width=150)
-        examples_label.pack(side="left", padx=5)
-        
+        examples_label = ctk.CTkLabel(header_frame, text="示例", width=200, font=ctk.CTkFont(weight="bold"))
+        examples_label.pack(side="left", padx=6)
+
         # 操作列
-        action_label = ctk.CTkLabel(header_frame, text="操作", width=60)
-        action_label.pack(side="left", padx=5)
+        action_label = ctk.CTkLabel(header_frame, text="操作", width=60, font=ctk.CTkFont(weight="bold"))
+        action_label.pack(side="left", padx=6)
         
     def _refresh_behavior_rows(self):
         """刷新行为行列表"""
@@ -282,8 +282,8 @@ class BehaviorConfigDialog:
         Returns:
             包含输入控件引用的字典
         """
-        row_frame = ctk.CTkFrame(self.rows_frame, height=40)
-        row_frame.pack(fill="x", pady=5)
+        row_frame = ctk.CTkFrame(self.rows_frame, height=62)
+        row_frame.pack(fill="x", pady=4)
         row_frame.pack_propagate(False)
 
         # 序号
@@ -291,20 +291,20 @@ class BehaviorConfigDialog:
         num_label.pack(side="left", padx=5)
 
         # 名称输入
-        name_entry = ctk.CTkEntry(row_frame, width=120)
+        name_entry = ctk.CTkEntry(row_frame, width=100)
         name_entry.insert(0, behavior.name)
         name_entry.pack(side="left", padx=5)
 
         # 描述输入
-        desc_entry = ctk.CTkEntry(row_frame, width=200)
+        desc_entry = ctk.CTkEntry(row_frame, width=240)
         desc_entry.insert(0, behavior.description)
         desc_entry.pack(side="left", padx=5, fill="x", expand=True)
 
-        # 示例输入
-        examples_text = "; ".join(behavior.examples) if behavior.examples else ""
-        examples_entry = ctk.CTkEntry(row_frame, width=150)
-        examples_entry.insert(0, examples_text)
-        examples_entry.pack(side="left", padx=5)
+        # 示例输入 - 使用多行 Textbox 支持自动换行
+        examples_text = "\n".join(behavior.examples) if behavior.examples else ""
+        examples_textbox = ctk.CTkTextbox(row_frame, width=200, height=52)
+        examples_textbox.insert("1.0", examples_text)
+        examples_textbox.pack(side="left", padx=5)
 
         # 操作按钮框架
         btn_frame = ctk.CTkFrame(row_frame, fg_color="transparent", width=60)
@@ -327,47 +327,47 @@ class BehaviorConfigDialog:
         return {
             'name': name_entry,
             'desc': desc_entry,
-            'examples': examples_entry
+            'examples': examples_textbox
         }
         
     def _create_button_bar(self):
         """创建底部按钮栏"""
         btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=10)
+        btn_frame.pack(fill="x", pady=(10, 5))
 
-        # 最左侧：模板、导入、导出按钮
+        # 最左侧：模板、导入、导出按钮（降低饱和度）
         self.template_btn = ctk.CTkButton(
             btn_frame,
             text="📋 模板",
             command=self._open_template_dialog,
-            width=70,
-            height=32,
-            fg_color="#008888",
-            hover_color="#006666"
+            width=75,
+            height=34,
+            fg_color="#116666",
+            hover_color="#004444"
         )
-        self.template_btn.pack(side="left", padx=3)
+        self.template_btn.pack(side="left", padx=2)
 
         self.import_btn = ctk.CTkButton(
             btn_frame,
             text="📥 导入",
             command=self._on_import,
-            width=70,
-            height=32,
-            fg_color="#555588",
-            hover_color="#333366"
+            width=75,
+            height=34,
+            fg_color="#333366",
+            hover_color="#222255"
         )
-        self.import_btn.pack(side="left", padx=3)
+        self.import_btn.pack(side="left", padx=2)
 
         self.export_btn = ctk.CTkButton(
             btn_frame,
             text="📤 导出",
             command=self._on_export,
-            width=70,
-            height=32,
-            fg_color="#555588",
-            hover_color="#333366"
+            width=75,
+            height=34,
+            fg_color="#333366",
+            hover_color="#222255"
         )
-        self.export_btn.pack(side="left", padx=(3, 20))
+        self.export_btn.pack(side="left", padx=(2, 15))
 
         # 左中：添加按钮
         self.add_btn = ctk.CTkButton(
@@ -375,9 +375,9 @@ class BehaviorConfigDialog:
             text="+ 添加行为",
             command=self._add_behavior,
             width=100,
-            height=32
+            height=34
         )
-        self.add_btn.pack(side="left", padx=3)
+        self.add_btn.pack(side="left", padx=2)
 
         # 中间：数量提示
         self.count_label = ctk.CTkLabel(
@@ -385,28 +385,30 @@ class BehaviorConfigDialog:
             text=f"当前: {len(self.behaviors)} 个 (最少 {self.MIN_BEHAVIORS}, 最多 {self.MAX_BEHAVIORS})",
             font=ctk.CTkFont(size=11)
         )
-        self.count_label.pack(side="left", padx=20)
+        self.count_label.pack(side="left", padx=15)
 
-        # 右侧：取消和保存按钮
+        # 右侧：取消和保存按钮（降低饱和度）
         self.cancel_btn = ctk.CTkButton(
             btn_frame,
-            text="取消",
+            text="✖ 取消",
             command=self._on_cancel,
             width=80,
-            height=32,
-            fg_color="gray",
-            hover_color="darkgray"
+            height=34,
+            fg_color="#666666",
+            hover_color="#444444"
         )
-        self.cancel_btn.pack(side="right", padx=3)
+        self.cancel_btn.pack(side="right", padx=2)
 
         self.save_btn = ctk.CTkButton(
             btn_frame,
-            text="保存配置",
+            text="💾 保存配置",
             command=self._on_save,
             width=100,
-            height=32
+            height=34,
+            fg_color="#224488",
+            hover_color="#113366"
         )
-        self.save_btn.pack(side="right", padx=3)
+        self.save_btn.pack(side="right", padx=2)
         
     # ===== 事件处理方法 =====
     
@@ -477,7 +479,8 @@ class BehaviorConfigDialog:
             # 从输入框读取最新值
             name = widgets['name'].get().strip()
             description = widgets['desc'].get().strip()
-            examples_text = widgets['examples'].get().strip()
+            # 从 Textbox 读取示例，支持换行分隔
+            examples_text = widgets['examples'].get("1.0", "end-1c").strip()
 
             # 检查是否有空内容
             if not name or not description:
@@ -498,8 +501,14 @@ class BehaviorConfigDialog:
                 has_special_chars = True
                 bad_items.append(f"第{i+1}项: {name}")
 
-            # 分割示例 - 同时支持英文分号和中文分号
-            examples = [ex.strip() for ex in re.split(r'[;；]', examples_text) if ex.strip()]
+            # 分割示例 - 支持多种分隔方式：换行、英文分号、中文分号
+            # 先按换行分割，如果只有一行再尝试按分号分割
+            lines = [ex.strip() for ex in examples_text.splitlines() if ex.strip()]
+            if len(lines) == 1 and lines[0]:
+                # 如果只有一行，尝试按分号分割
+                examples = [ex.strip() for ex in re.split(r'[;；]', lines[0]) if ex.strip()]
+            else:
+                examples = lines
 
             # 创建行为定义
             behavior = BehaviorDefinition(
@@ -700,8 +709,15 @@ class BehaviorConfigDialog:
         for widgets in self.row_widgets:
             name = widgets['name'].get().strip()
             description = widgets['desc'].get().strip()
-            examples_text = widgets['examples'].get().strip()
-            examples = [ex.strip() for ex in re.split(r'[;；]', examples_text) if ex.strip()]
+            # 从 Textbox 读取示例，支持换行分隔
+            examples_text = widgets['examples'].get("1.0", "end-1c").strip()
+            # 分割示例 - 支持多种分隔方式：换行、英文分号、中文分号
+            lines = [ex.strip() for ex in examples_text.splitlines() if ex.strip()]
+            if len(lines) == 1 and lines[0]:
+                # 如果只有一行，尝试按分号分割
+                examples = [ex.strip() for ex in re.split(r'[;；]', lines[0]) if ex.strip()]
+            else:
+                examples = lines
             current_behaviors.append({
                 "name": name,
                 "description": description,

@@ -4,7 +4,9 @@
 提供基于 CustomTkinter 的主应用程序窗口。
 """
 
+import json
 import customtkinter as ctk
+from pathlib import Path
 from typing import Optional, Callable
 
 from config.settings import settings
@@ -21,15 +23,24 @@ class MainWindow:
     
     def __init__(self):
         """初始化主窗口"""
+        # 配置文件路径（存储用户偏好）
+        self.USER_CONFIG_FILE = Path(__file__).parent.parent / ".user_config.json"
+
+        # 加载保存的主题设置，默认跟随系统
+        saved_theme = self._load_appearance_mode()
+
         # 设置 CustomTkinter 外观
-        ctk.set_appearance_mode("System")  # System, Dark, Light
+        ctk.set_appearance_mode(saved_theme)
         ctk.set_default_color_theme("blue")  # blue, green, dark-blue
 
-        # 创建主窗口
+        # 创建主窗口（必须先创建 root 才能创建 StringVar）
         self.root = ctk.CTk()
         self.root.title("语音实时转录系统")
         self.root.geometry("1200x800")
         self.root.minsize(800, 600)
+
+        # 创建主题变量（必须在 root 创建之后）
+        self.appearance_mode = ctk.StringVar(value=saved_theme)
 
         # 存储回调函数
         self.on_start_callback: Optional[Callable] = None
@@ -90,49 +101,55 @@ class MainWindow:
         self.button_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
         self.button_frame.pack(side="right", padx=10, pady=10)
         
-        # 开始按钮
+        # 开始按钮 - 绿色表示可开始（降低饱和度）
         self.start_btn = ctk.CTkButton(
             self.button_frame,
-            text="开始录音",
+            text="▶ 开始录音",
             command=self._on_start_click,
-            width=120,
-            height=35
+            width=110,
+            height=36,
+            fg_color="#2D8855",
+            hover_color="#1D6644"
         )
-        self.start_btn.pack(side="left", padx=5)
+        self.start_btn.pack(side="left", padx=4)
 
-        # 暂停/继续按钮
+        # 暂停/继续按钮 - 橙色表示暂停（降低饱和度）
         self.pause_btn = ctk.CTkButton(
             self.button_frame,
-            text="暂停",
+            text="⏸ 暂停",
             command=self._on_pause_click,
-            width=100,
-            height=35,
+            width=90,
+            height=36,
             state="disabled",
-            fg_color="#CC8800",
-            hover_color="#AA6600"
+            fg_color="#AA7722",
+            hover_color="#885511"
         )
-        self.pause_btn.pack(side="left", padx=5)
+        self.pause_btn.pack(side="left", padx=4)
 
-        # 停止按钮
+        # 停止按钮 - 红色表示停止（降低饱和度）
         self.stop_btn = ctk.CTkButton(
             self.button_frame,
-            text="停止录音",
+            text="⏹ 停止",
             command=self._on_stop_click,
-            width=120,
-            height=35,
-            state="disabled"
+            width=90,
+            height=36,
+            state="disabled",
+            fg_color="#AA3333",
+            hover_color="#882222"
         )
-        self.stop_btn.pack(side="left", padx=5)
+        self.stop_btn.pack(side="left", padx=4)
 
-        # 导出按钮
+        # 导出按钮 - 蓝色表示操作（降低饱和度）
         self.export_btn = ctk.CTkButton(
             self.button_frame,
-            text="导出文档",
+            text="💾 导出",
             command=self._on_export_click,
-            width=120,
-            height=35
+            width=80,
+            height=36,
+            fg_color="#335599",
+            hover_color="#224477"
         )
-        self.export_btn.pack(side="left", padx=5)
+        self.export_btn.pack(side="left", padx=4)
         
     def _create_content_area(self):
         """创建中间内容区"""
@@ -158,31 +175,31 @@ class MainWindow:
         # 左侧标签
         self.transcription_label = ctk.CTkLabel(
             self.transcription_frame,
-            text="实时转录",
+            text="📝 实时转录",
             font=ctk.CTkFont(size=14, weight="bold")
         )
-        self.transcription_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
+        self.transcription_label.grid(row=0, column=0, padx=(12, 0), pady=(12, 6), sticky="w")
 
         # 中间搜索框区域
         self.search_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
-        self.search_frame.grid(row=0, column=1, padx=(0, 5), pady=(10, 5), sticky="ew")
+        self.search_frame.grid(row=0, column=1, padx=(10, 5), pady=(10, 5), sticky="ew")
 
         # 搜索输入框
         self.search_entry = ctk.CTkEntry(
             self.search_frame,
-            placeholder_text="搜索...",
-            width=150,
-            height=28
+            placeholder_text="🔍 搜索...",
+            width=140,
+            height=30
         )
-        self.search_entry.pack(side="left", padx=(0, 5))
+        self.search_entry.pack(side="left", padx=(0, 4))
 
         # 上一个匹配按钮
         self.prev_btn = ctk.CTkButton(
             self.search_frame,
             text="▲",
             command=self._search_prev,
-            width=30,
-            height=28,
+            width=28,
+            height=30,
             fg_color="#555555",
             hover_color="#333333"
         )
@@ -193,22 +210,22 @@ class MainWindow:
             self.search_frame,
             text="▼",
             command=self._search_next,
-            width=30,
-            height=28,
+            width=28,
+            height=30,
             fg_color="#555555",
             hover_color="#333333"
         )
-        self.next_btn.pack(side="left", padx=(0, 5))
+        self.next_btn.pack(side="left", padx=(0, 4))
 
         # 右侧选项区域
         self.options_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
-        self.options_frame.grid(row=0, column=2, padx=5, pady=(10, 5), sticky="e")
+        self.options_frame.grid(row=0, column=2, padx=(5, 12), pady=(10, 5), sticky="e")
 
         # 滚动锁定复选框 (Task 10)
         self.scroll_lock_var = ctk.BooleanVar(value=False)
         self.scroll_lock_check = ctk.CTkCheckBox(
             self.options_frame,
-            text="滚动锁定",
+            text="🔒 滚动锁定",
             variable=self.scroll_lock_var,
             onvalue=True,
             offvalue=False,
@@ -279,18 +296,20 @@ class MainWindow:
         # 2. 行为匹配配置按钮
         self.behavior_btn = ctk.CTkButton(
             self.settings_frame,
-            text="配置关键行为 (Ctrl+B)",
-            command=self._on_behavior_config_click
+            text="⚙ 配置关键行为 (Ctrl+B)",
+            command=self._on_behavior_config_click,
+            height=36
         )
-        self.behavior_btn.pack(fill="x", padx=10, pady=5)
+        self.behavior_btn.pack(fill="x", padx=10, pady=(0, 6))
 
         # 3. 导出设置按钮
         self.export_settings_btn = ctk.CTkButton(
             self.settings_frame,
-            text="导出设置",
-            command=self._on_export_settings_click
+            text="📝 导出设置",
+            command=self._on_export_settings_click,
+            height=36
         )
-        self.export_settings_btn.pack(fill="x", padx=10, pady=5)
+        self.export_settings_btn.pack(fill="x", padx=10, pady=(0, 6))
 
         # 分隔线
         self.separator2 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
@@ -352,54 +371,83 @@ class MainWindow:
         
     def _create_status_bar(self):
         """创建底部状态栏"""
-        self.status_frame = ctk.CTkFrame(self.main_frame, height=30)
-        self.status_frame.grid(row=2, column=0, padx=10, pady=(5, 10), sticky="ew")
+        self.status_frame = ctk.CTkFrame(self.main_frame, height=34)
+        self.status_frame.grid(row=2, column=0, padx=12, pady=(6, 10), sticky="ew")
         self.status_frame.grid_propagate(False)
 
         # 录音状态指示灯（最左侧）
         self.recording_indicator = ctk.CTkLabel(
             self.status_frame,
             text="●",
-            font=ctk.CTkFont(size=16),
+            font=ctk.CTkFont(size=18),
             text_color="gray50"
         )
-        self.recording_indicator.pack(side="left", padx=(10, 0))
+        self.recording_indicator.pack(side="left", padx=(12, 0))
 
         # 状态标签
         self.status_label = ctk.CTkLabel(
             self.status_frame,
             text="就绪",
-            font=ctk.CTkFont(size=11)
+            font=ctk.CTkFont(size=12)
         )
-        self.status_label.pack(side="left", padx=8, pady=10)
+        self.status_label.pack(side="left", padx=10, pady=8)
 
-        # 音量指示器框架（放在右侧，时长左边）
+        # 音量指示器框架（最右侧）
         self.volume_frame = ctk.CTkFrame(
             self.status_frame,
             width=80,
-            height=16,
+            height=18,
             fg_color="gray20"
         )
-        self.volume_frame.pack(side="right", padx=(0, 10))
+        self.volume_frame.pack(side="right", padx=(2, 12))
         self.volume_frame.grid_propagate(False)
 
         # 音量进度条
         self.volume_bar = ctk.CTkProgressBar(
             self.volume_frame,
             width=76,
-            height=12,
+            height=14,
             corner_radius=2
         )
         self.volume_bar.set(0)
         self.volume_bar.place(relx=0.5, rely=0.5, anchor="center")
 
-        # 录音时长
+        # 音量标签
+        self.volume_label = ctk.CTkLabel(
+            self.status_frame,
+            text="音量:",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.volume_label.pack(side="right", padx=(5, 2))
+
+        # 主题模式选择（音量左边）
+        self.theme_menu = ctk.CTkOptionMenu(
+            self.status_frame,
+            values=["System", "Light", "Dark"],
+            variable=self.appearance_mode,
+            command=self._on_theme_change,
+            width=80,
+            height=22,
+            font=ctk.CTkFont(size=10)
+        )
+        self.theme_menu.pack(side="right", padx=(2, 5))
+
+        self.theme_label = ctk.CTkLabel(
+            self.status_frame,
+            text="🎨 主题:",
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
+        )
+        self.theme_label.pack(side="right", padx=(8, 2))
+
+        # 时长标签
         self.duration_label = ctk.CTkLabel(
             self.status_frame,
-            text="00:00",
-            font=ctk.CTkFont(size=11)
+            text=" ⏱  00:00",
+            font=ctk.CTkFont(size=12)
         )
-        self.duration_label.pack(side="right", padx=10)
+        self.duration_label.pack(side="right", padx=(0, 8))
 
         # 闪烁动画控制
         self._is_recording_flashing = False
@@ -845,6 +893,72 @@ class MainWindow:
     def close(self):
         """关闭窗口"""
         self.root.destroy()
+
+    # ===== 主题切换相关方法 =====
+
+    def _load_appearance_mode(self) -> str:
+        """
+        加载保存的外观模式
+
+        Returns:
+            保存的模式名称，默认 System
+        """
+        default_mode = "System"
+
+        if not self.USER_CONFIG_FILE.exists():
+            return default_mode
+
+        try:
+            with open(self.USER_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            mode = data.get("appearance_mode", default_mode)
+            # 验证模式有效性
+            if mode in ["System", "Light", "Dark"]:
+                logger.debug(f"加载保存的主题模式: {mode}")
+                return mode
+            else:
+                return default_mode
+        except Exception as e:
+            logger.warning(f"加载主题配置失败，使用默认: {e}")
+            return default_mode
+
+    def _save_appearance_mode(self, mode: str) -> None:
+        """
+        保存外观模式到配置文件
+
+        Args:
+            mode: 模式名称
+        """
+        try:
+            # 读取现有配置如果存在
+            config = {}
+            if self.USER_CONFIG_FILE.exists():
+                with open(self.USER_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+
+            # 更新主题设置
+            config["appearance_mode"] = mode
+
+            # 保存回去
+            with open(self.USER_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+
+            logger.debug(f"保存主题模式: {mode}")
+        except Exception as e:
+            logger.warning(f"保存主题配置失败: {e}")
+
+    def _on_theme_change(self, mode: str) -> None:
+        """
+        主题模式切换回调
+
+        Args:
+            mode: 新的模式名称
+        """
+        # 应用主题
+        ctk.set_appearance_mode(mode)
+        # 保存用户选择
+        self._save_appearance_mode(mode)
+        logger.info(f"主题已切换: {mode}")
 
 
 def main():

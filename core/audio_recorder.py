@@ -464,13 +464,17 @@ class AudioRecorder:
         Returns:
             归一化音量，0 表示静音，1 表示最大音量
         """
-        if self._max_rms <= 0:
+        # int16 音频的理论最大 RMS 就是 32768，直接用这个作为基准
+        # 不依赖动态 _max_rms 避免灵敏度随录音进程逐渐降低
+        max_rms = 32768.0
+        if self._current_rms <= 0:
             return 0.0
-        # 归一化，并使用对数缩放让人眼感受更自然
-        normalized = min(1.0, self._current_rms / max(self._max_rms, 32768))
-        # 对数缩放，增强低音量可见性
+        # 归一化
+        normalized = min(1.0, self._current_rms / max_rms)
+        # 使用平方根缩放，比对数更灵敏，小音量也有明显变化
+        # 同时保留一定的压缩，避免大音量溢出
         if normalized > 0:
-            return np.log10(1 + 9 * normalized)
+            return np.sqrt(normalized)
         return 0.0
 
     def reset_volume_level(self) -> None:

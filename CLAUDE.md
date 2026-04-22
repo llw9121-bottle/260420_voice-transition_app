@@ -187,6 +187,13 @@ OUTPUT_DIR=./output
 - 日志文件: `./logs/`
 - 测试输出: `./test_output/`
 
+### 用户本地配置
+
+应用会在项目根目录创建以下配置文件存储用户偏好，这些文件已经加入 `.gitignore` 不会提交到 Git：
+
+- `.export_config.json` - 记住用户上次选择的导出目录
+- `.user_config.json` - 用户偏好设置（主题模式等）
+
 ### 测试
 
 项目采用双层测试结构：
