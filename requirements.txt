@@ -1,0 +1,23 @@
+# Requirements for Voice Transcription App
+
+# Configuration and utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Logging
+loguru>=0.7.0
+
+# Audio processing
+pyaudio>=0.2.14
+numpy>=1.26.0
+
+# GUI
+customtkinter>=5.2.0
+
+# DashScope AI Services
+dashscope>=1.25.6
+websocket-client>=1.6
+
+# Document export
+python-docx>=1.1.0

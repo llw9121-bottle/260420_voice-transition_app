@@ -1,0 +1,272 @@
+"""
+阿里云百炼(Bailian)大模型客户端
+
+用于文本格式化、行为匹配等LLM任务。
+支持Qwen-Max、Qwen-Plus等模型。
+"""
+
+import json
+from typing import Any, Dict, List, Optional, Callable
+
+import requests
+from loguru import logger
+
+from config.settings import settings
+
+
+class BailianLLMClient:
+    """
+    百炼大模型客户端
+    
+    用于：
+    - 文本格式化
+    - 关键行为匹配
+    - 摘要生成
+    """
+    
+    # 可用模型
+    MODEL_QWEN_MAX = "qwen-max"
+    MODEL_QWEN_PLUS = "qwen-plus"
+    MODEL_QWEN_TURBO = "qwen-turbo"
+    
+    # API端点
+    BASE_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+    
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = MODEL_QWEN_PLUS,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None
+    ):
+        """
+        初始化客户端
+        
+        Args:
+            api_key: API Key，默认从配置读取
+            model: 模型名称
+            temperature: 温度参数
+            max_tokens: 最大生成token数
+        """
+        self.api_key = api_key or settings.api.get_bailian_api_key()
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        
+        if not self.api_key:
+            raise ValueError("API Key未设置")
+        
+        logger.debug(f"BailianLLMClient初始化完成，模型: {model}")
+    
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stream: bool = False,
+        on_chunk: Optional[Callable[[str], None]] = None
+    ) -> str:
+        """
+        生成文本
+        
+        Args:
+            prompt: 用户提示词
+            system_prompt: 系统提示词
+            temperature: 温度（覆盖默认值）
+            max_tokens: 最大token数
+            stream: 是否流式输出
+            on_chunk: 流式回调函数
+            
+        Returns:
+            生成的文本
+        """
+        messages = []
+        
+        if system_prompt:
+            messages.append({
+                "role": "system",
+                "content": system_prompt
+            })
+        
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
+        
+        payload = {
+            "model": self.model,
+            "input": {
+                "messages": messages
+            },
+            "parameters": {
+                "temperature": temperature or self.temperature,
+                "result_format": "message"
+            }
+        }
+        
+        if max_tokens or self.max_tokens:
+            payload["parameters"]["max_tokens"] = max_tokens or self.max_tokens
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            if stream and on_chunk:
+                return self._stream_generate(payload, headers, on_chunk)
+            else:
+                response = requests.post(
+                    self.BASE_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=120
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                
+                if "output" in data and "choices" in data["output"]:
+                    return data["output"]["choices"][0]["message"]["content"]
+                else:
+                    logger.error(f"Unexpected response format: {data}")
+                    raise ValueError("API返回格式异常")
+                    
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API请求失败: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"生成失败: {e}")
+            raise
+    
+    def _stream_generate(
+        self,
+        payload: dict,
+        headers: dict,
+        on_chunk: Callable[[str], None]
+    ) -> str:
+        """流式生成"""
+        full_text = []
+        
+        try:
+            response = requests.post(
+                self.BASE_URL,
+                json=payload,
+                headers=headers,
+                stream=True,
+                timeout=120
+            )
+            response.raise_for_status()
+            
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data:'):
+                        data_str = line[5:].strip()
+                        if data_str == '[DONE]':
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if "output" in data and "choices" in data["output"]:
+                                delta = data["output"]["choices"][0].get("message", {}).get("content", "")
+                                if delta:
+                                    on_chunk(delta)
+                                    full_text.append(delta)
+                        except json.JSONDecodeError:
+                            continue
+            
+            return ''.join(full_text)
+            
+        except Exception as e:
+            logger.error(f"流式生成失败: {e}")
+            raise
+
+
+class LLMFormatter:
+    """
+    LLM格式化工具
+    
+    封装常见的格式化任务。
+    """
+    
+    def __init__(self, client: Optional[BailianLLMClient] = None):
+        self.client = client or BailianLLMClient()
+    
+    def format_text(
+        self,
+        text: str,
+        style: str = "standard",
+        instructions: Optional[str] = None
+    ) -> str:
+        """
+        格式化文本
+        
+        Args:
+            text: 原始文本
+            style: 格式化风格 (standard/formal/concise/casual)
+            instructions: 额外指令
+            
+        Returns:
+            格式化后的文本
+        """
+        style_prompts = {
+            "standard": "请对以下文本进行标准化格式化，去除冗余内容，保持原意：",
+            "formal": "请将以下文本转换为正式书面语，适合正式场合：",
+            "concise": "请将以下文本精简，保留核心信息：",
+            "casual": "请将以下文本转换为轻松自然的口语风格：",
+        }
+        
+        prompt = style_prompts.get(style, style_prompts["standard"])
+        
+        if instructions:
+            prompt += f"\n额外要求：{instructions}"
+        
+        prompt += f"\n\n原文：\n{text}"
+        
+        return self.client.generate(
+            prompt=prompt,
+            system_prompt="你是一个专业的文本格式化助手。"
+        )
+    
+    def generate_summary(
+        self,
+        text: str,
+        max_length: int = 200,
+        style: str = "concise"
+    ) -> str:
+        """
+        生成摘要
+        
+        Args:
+            text: 原文
+            max_length: 最大长度
+            style: 摘要风格 (concise/detailed/key_points)
+            
+        Returns:
+            摘要文本
+        """
+        style_prompts = {
+            "concise": f"请用不超过{max_length}字概括以下内容的核心要点：",
+            "detailed": f"请总结以下内容，保留关键信息，长度控制在{max_length}字左右：",
+            "key_points": f"请提取以下内容的关键要点，用条目列出：",
+        }
+        
+        prompt = style_prompts.get(style, style_prompts["concise"])
+        prompt += f"\n\n{text}"
+        
+        return self.client.generate(prompt=prompt)
+
+
+# 便捷函数
+
+def quick_format(text: str, style: str = "standard") -> str:
+    """快速格式化文本"""
+    formatter = LLMFormatter()
+    return formatter.format_text(text, style=style)
+
+
+def quick_summary(text: str, max_length: int = 200) -> str:
+    """快速生成摘要"""
+    formatter = LLMFormatter()
+    return formatter.generate_summary(text, max_length=max_length)
