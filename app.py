@@ -533,29 +533,29 @@ class VoiceTranscriptionApp:
 
     def _check_api_configuration_on_startup(self):
         """
-        启动时检查API配置，如果未配置弹出友好提示引导用户配置。
+        启动时检查API配置，如果未配置弹出配置对话框让用户直接输入。
         """
-        from config.settings import check_api_configuration
+        from config.settings import check_api_configuration, settings
         status = check_api_configuration()
 
         if not status["dashscope_configured"]:
-            # DashScope API Key 未配置，弹出提示
-            def show_config_prompt():
-                import tkinter.messagebox as messagebox
-                result = messagebox.showwarning(
-                    "API Key 未配置",
-                    "检测到 DashScope API Key 尚未配置。\n\n"
-                    "本应用需要阿里云 DashScope 服务进行实时语音识别，请按以下步骤配置：\n"
-                    "1. 在项目根目录复制 .env.example 为 .env\n"
-                    "2. 打开 .env 文件，填入你的 DASHSCOPE_API_KEY\n"
-                    "3. 重启应用\n\n"
-                    "获取 API Key: https://help.aliyun.com/zh/dashscope/developer-reference/acquisition-and-configuration-of-api-key\n\n"
-                    "配置完成后重启应用即可开始使用。"
+            # DashScope API Key 未配置，弹出配置对话框
+            def show_config_dialog():
+                from gui.api_settings_dialog import APISettingsDialog
+                # 获取当前已有的值（可能为空）
+                current_dashscope = settings.api.dashscope_api_key
+                current_bailian = settings.api.bailian_api_key
+                # 打开对话框，首次启动，保存后退出让用户重启
+                dialog = APISettingsDialog(
+                    self.main_window.root,
+                    initial_dashscope=current_dashscope,
+                    initial_bailian=current_bailian,
+                    is_first_launch=True
                 )
 
-            # 在主窗口加载后显示提示
-            self.main_window.root.after(500, show_config_prompt)
-            logger.warning("DashScope API Key 未配置，提示用户配置")
+            # 在主窗口加载后显示对话框
+            self.main_window.root.after(500, show_config_dialog)
+            logger.warning("DashScope API Key 未配置，弹出配置对话框")
 
     def _check_unsaved_recording(self):
         """

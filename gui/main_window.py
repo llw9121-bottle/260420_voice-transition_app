@@ -525,6 +525,21 @@ class MainWindow:
         # 存储设备列表
         self.available_devices: list[tuple[int, str]] = []  # (index, name)
         self.selected_device_index: Optional[int] = None
+
+        # 分隔线
+        self.separator5 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
+        self.separator5.pack(fill="x", padx=10, pady=(15, 10))
+
+        # API 设置按钮
+        self.api_settings_btn = ctk.CTkButton(
+            self.settings_frame,
+            text="🔑 设置 API Key",
+            command=self._open_api_settings,
+            height=34,
+            fg_color="#553388",
+            hover_color="#442277"
+        )
+        self.api_settings_btn.pack(fill="x", padx=10, pady=(0, 10))
         
     def _create_status_bar(self):
         """创建底部状态栏"""
@@ -1290,6 +1305,21 @@ VAD(语音活动检测)静音时长控制断句灵敏度：
         help_window.geometry(f"+{x}+{y}")
 
         logger.info("打开使用帮助")
+
+    def _open_api_settings(self) -> None:
+        """打开 API Key 设置对话框"""
+        from gui.api_settings_dialog import APISettingsDialog
+        from config.settings import settings
+
+        dialog = APISettingsDialog(
+            self.root,
+            initial_dashscope=settings.api.dashscope_api_key,
+            initial_bailian=settings.api.bailian_api_key,
+            is_first_launch=False
+        )
+        self.root.wait_window(dialog.window)
+
+        logger.info("API 设置对话框已关闭")
 
 
 def main():

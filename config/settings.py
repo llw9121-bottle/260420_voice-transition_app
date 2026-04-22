@@ -189,18 +189,86 @@ settings = AppSettings()
 def check_api_configuration() -> dict:
     """
     检查API配置状态
-    
+
     Returns:
         配置状态字典
     """
     api = settings.api
-    
+
     return {
         "dashscope_configured": api.is_dashscope_configured,
         "bailian_configured": api.is_bailian_configured,
         "dashscope_key_preview": api.dashscope_api_key[:8] + "***" if api.dashscope_api_key else "未设置",
         "bailian_key_preview": api.bailian_api_key[:8] + "***" if api.bailian_api_key else "未设置(可使用DashScope Key)",
     }
+
+
+def save_api_configuration(dashscope_api_key: str, bailian_api_key: str = "") -> bool:
+    """
+    保存API配置到 .env 文件
+
+    Args:
+        dashscope_api_key: DashScope API Key
+        bailian_api_key: Bailian API Key (可选，留空表示使用DashScope Key)
+
+    Returns:
+        是否保存成功
+    """
+    try:
+        env_path = Path(__file__).parent.parent / ".env"
+        env_example_path = Path(__file__).parent.parent / ".env.example"
+
+        # 如果.env不存在，从.example复制模板
+        if not env_path.exists() and env_example_path.exists():
+            with open(env_example_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        else:
+            # 读取现有内容
+            if env_path.exists():
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            else:
+                content = ""
+
+        # 更新或添加DASHSCOPE_API_KEY
+        lines = content.splitlines()
+        new_lines = []
+        dashscope_found = False
+        bailian_found = False
+
+        for line in lines:
+            line_stripped = line.strip()
+            if line_stripped.startswith('DASHSCOPE_API_KEY='):
+                new_lines.append(f'DASHSCOPE_API_KEY={dashscope_api_key}')
+                dashscope_found = True
+            elif line_stripped.startswith('BAILIAN_API_KEY='):
+                new_lines.append(f'BAILIAN_API_KEY={bailian_api_key}')
+                bailian_found = True
+            else:
+                new_lines.append(line)
+
+        # 如果没找到，添加到末尾
+        if not dashscope_found:
+            new_lines.append(f'DASHSCOPE_API_KEY={dashscope_api_key}')
+        if not bailian_found:
+            new_lines.append(f'BAILIAN_API_KEY={bailian_api_key}')
+
+        # 确保其他必要配置存在
+        if not any(line.strip().startswith('DASHSCOPE_REGION=') for line in new_lines):
+            new_lines.append('DASHSCOPE_REGION=cn-beijing')
+        if not any(line.strip().startswith('OUTPUT_DIR=') for line in new_lines):
+            new_lines.append('OUTPUT_DIR=./output')
+
+        # 写入文件
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(new_lines) + '\n')
+
+        logger.info(f"API配置已保存到: {env_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"保存API配置失败: {e}")
+        return False
 
 
 if __name__ == "__main__":
