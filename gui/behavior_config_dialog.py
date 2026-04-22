@@ -39,11 +39,15 @@ class BehaviorConfigDialog:
         self.behaviors: List[BehaviorDefinition] = []
         self.row_widgets: List[dict] = []  # 保存每行输入控件的引用: [{'name': entry, 'desc': entry, 'examples': entry}, ...]
 
+        # 选项设置
+        self.enable_paragraph_reorganization = ctk.BooleanVar(value=True)
+        self.auto_chunk_long_text = ctk.BooleanVar(value=True)
+
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
         self.window.title("配置关键行为")
-        self.window.geometry("800x600")
-        self.window.minsize(700, 500)
+        self.window.geometry("800x650")
+        self.window.minsize(700, 550)
 
         # 模态对话框
         self.window.transient(parent)
@@ -52,6 +56,12 @@ class BehaviorConfigDialog:
         # 初始化默认行为
         if initial_config and initial_config.behaviors:
             self.behaviors = list(initial_config.behaviors)
+            self.enable_paragraph_reorganization.set(
+                getattr(initial_config, 'enable_paragraph_reorganization', True)
+            )
+            self.auto_chunk_long_text.set(
+                getattr(initial_config, 'auto_chunk_long_text', True)
+            )
         else:
             self._init_default_behaviors()
 
@@ -88,7 +98,7 @@ class BehaviorConfigDialog:
         # 主框架
         self.main_frame = ctk.CTkFrame(self.window)
         self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
+
         # 标题
         self.title_label = ctk.CTkLabel(
             self.main_frame,
@@ -96,7 +106,7 @@ class BehaviorConfigDialog:
             font=ctk.CTkFont(size=18, weight="bold")
         )
         self.title_label.pack(anchor="w", pady=(0, 5))
-        
+
         # 说明文本
         self.desc_label = ctk.CTkLabel(
             self.main_frame,
@@ -105,21 +115,49 @@ class BehaviorConfigDialog:
             text_color="gray"
         )
         self.desc_label.pack(anchor="w", pady=(0, 10))
-        
+
+        # 高级选项框架
+        self.options_frame = ctk.CTkFrame(self.main_frame)
+        self.options_frame.pack(fill="x", pady=(0, 10))
+
+        # 选项标题
+        self.options_label = ctk.CTkLabel(
+            self.options_frame,
+            text="高级选项",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.options_label.pack(anchor="w", padx=10, pady=(5, 5))
+
+        # 段落整理复选框
+        self.para_reorg_check = ctk.CTkCheckBox(
+            self.options_frame,
+            text="启用 LLM 段落整理（先清洗再分段，提升匹配质量，消耗额外 Token）",
+            variable=self.enable_paragraph_reorganization
+        )
+        self.para_reorg_check.pack(anchor="w", padx=10, pady=(2, 2))
+
+        # 自动分块复选框
+        self.auto_chunk_check = ctk.CTkCheckBox(
+            self.options_frame,
+            text="自动分块处理超长文本（超过 3万字 自动分割，避免上下文溢出）",
+            variable=self.auto_chunk_long_text
+        )
+        self.auto_chunk_check.pack(anchor="w", padx=10, pady=(2, 5))
+
         # 行为列表框架
         self.list_frame = ctk.CTkFrame(self.main_frame)
         self.list_frame.pack(fill="both", expand=True, pady=5)
-        
+
         # 表头
         self._create_table_header()
-        
+
         # 行为行容器
         self.rows_frame = ctk.CTkScrollableFrame(self.list_frame)
         self.rows_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
+
         # 创建行为行
         self._refresh_behavior_rows()
-        
+
         # 底部按钮栏
         self._create_button_bar()
         
@@ -369,7 +407,9 @@ class BehaviorConfigDialog:
             behaviors=updated_behaviors,
             min_confidence=0.6,
             include_context=True,
-            context_chars=30
+            context_chars=30,
+            enable_paragraph_reorganization=self.enable_paragraph_reorganization.get(),
+            auto_chunk_long_text=self.auto_chunk_long_text.get()
         )
 
         # 验证

@@ -21,8 +21,10 @@ from core.formatter.base import (
 )
 from core.formatter.styles import (
     CleanedStyle,
-    ParagraphStyle
+    ParagraphStyle,
+    BehaviorMatchStyle
 )
+from core.formatter.behavior_matcher import BehaviorConfig
 from core.formatter.naming import (
     generate_filename,
     NamingStrategy
@@ -288,6 +290,64 @@ class TestExporters:
         assert final_path.exists()
         # 文件大小应该大于空文档
         assert final_path.stat().st_size > 100
+
+
+class TestBehaviorMatchStyle:
+    """行为匹配格式化测试"""
+
+    def test_behavior_statistics_generation(self):
+        """测试行为频率统计生成
+
+        验证：
+        - 按行为名称正确分组统计
+        - 按置信度正确分类（高 >= 0.8，中 0.6-0.8，低 < 0.6）
+        - 按总次数降序排序
+        - 生成 Markdown 表格包含合计行
+        """
+        # Arrange
+        from core.formatter.behavior_matcher import BehaviorDefinition
+        config = BehaviorConfig(
+            behaviors=[
+                BehaviorDefinition(name="决策安排", description="决策相关"),
+                BehaviorDefinition(name="风险识别", description="风险相关"),
+                BehaviorDefinition(name="前瞻思考", description="前瞻相关"),
+            ]
+        )
+        style = BehaviorMatchStyle(config)
+
+        matches = [
+            BehaviorMatch(behavior_name="决策安排", confidence=0.95, original_text="...", context_start=0, context_end=10),
+            BehaviorMatch(behavior_name="决策安排", confidence=0.85, original_text="...", context_start=20, context_end=30),
+            BehaviorMatch(behavior_name="决策安排", confidence=0.70, original_text="...", context_start=40, context_end=50),
+            BehaviorMatch(behavior_name="风险识别", confidence=0.80, original_text="...", context_start=60, context_end=70),
+            BehaviorMatch(behavior_name="风险识别", confidence=0.65, original_text="...", context_start=80, context_end=90),
+            BehaviorMatch(behavior_name="前瞻思考", confidence=0.55, original_text="...", context_start=100, context_end=110),
+        ]
+
+        # Act
+        stats_text = style._generate_statistics(matches)
+
+        # Assert
+        assert "行为频率统计" in stats_text
+        assert "| 行为名称 | 总计 | 高置信度" in stats_text
+        # 决策安排总计 3 次，高置信度 2 次（0.95, 0.85），中置信度 1 次（0.70）
+        assert "| 决策安排 | 3 | 2 | 1 | 0 |" in stats_text
+        # 风险识别总计 2 次，高置信度 1 次（0.80），中置信度 1 次（0.65）
+        assert "| 风险识别 | 2 | 1 | 1 | 0 |" in stats_text
+        # 前瞻思考总计 1 次，低置信度 1 次（0.55）
+        assert "| 前瞻思考 | 1 | 0 | 0 | 1 |" in stats_text
+        # 合计行
+        assert "| **合计** | **6**" in stats_text
+        # 按总次数降序，决策安排在前，前瞻思考在后
+        assert stats_text.index("决策安排") < stats_text.index("前瞻思考")
+
+    def test_no_matches_no_statistics(self):
+        """测试没有匹配结果时不生成统计"""
+        config = BehaviorConfig()
+        style = BehaviorMatchStyle(config)
+        result = style._format_with_matches("原始测试文本", [])
+        assert result == "原始测试文本"
+        assert "行为频率统计" not in result
 
 
 if __name__ == "__main__":

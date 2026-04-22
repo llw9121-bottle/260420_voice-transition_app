@@ -110,46 +110,110 @@ class ParagraphStyle(StyleFormatter):
 class BehaviorMatchStyle(StyleFormatter):
     """
     关键行为匹配风格
-    
+
     使用LLM识别文本中的关键行为，并标注。
+    支持逐步精细化处理：清洗 → 段落整理 → 行为匹配
     """
-    
-    def __init__(self, behavior_config: Optional[BehaviorConfig] = None):
+
+    def __init__(
+        self,
+        behavior_config: Optional[BehaviorConfig] = None,
+        enable_paragraph_reorganization: bool = None,
+        auto_chunk_long_text: bool = None
+    ):
+        """
+        初始化行为匹配风格
+
+        Args:
+            behavior_config: 行为匹配配置
+            enable_paragraph_reorganization: 是否启用LLM段落整理，
+                如果为None则从behavior_config读取，默认启用
+            auto_chunk_long_text: 是否自动分块处理超长文本，
+                如果为None则从behavior_config读取，默认启用
+        """
         self.behavior_config = behavior_config
+        # 如果传入了配置，从配置读取选项
+        if behavior_config is not None:
+            self.enable_paragraph_reorganization = getattr(
+                behavior_config, 'enable_paragraph_reorganization', True
+            )
+            self.auto_chunk_long_text = getattr(
+                behavior_config, 'auto_chunk_long_text', True
+            )
+        else:
+            self.enable_paragraph_reorganization = (
+                enable_paragraph_reorganization if enable_paragraph_reorganization is not None else True
+            )
+            self.auto_chunk_long_text = (
+                auto_chunk_long_text if auto_chunk_long_text is not None else True
+            )
         self._matcher: Optional[BehaviorMatcher] = None
-    
+
     @property
     def style(self) -> FormattingStyle:
         return FormattingStyle.BEHAVIOR_MATCH
-    
+
     def format(self, document: FormattedDocument, **kwargs) -> FormattedDocument:
-        """行为匹配风格：识别并标注关键行为"""
+        """
+        行为匹配风格：识别并标注关键行为
+
+        处理流程：
+        1. 清洗文本（去除语气词、重复）
+        2. （可选）LLM段落整理，按语义重新分段
+        3. 行为匹配，对整理后的文本识别关键行为
+        """
         # 获取配置
         config = self.behavior_config
         if not config:
             config = kwargs.get("behavior_config")
 
+        # 读取可选配置覆盖
+        enable_para_reorg = kwargs.get(
+            "enable_paragraph_reorganization",
+            self.enable_paragraph_reorganization
+        )
+        auto_chunk = kwargs.get(
+            "auto_chunk_long_text",
+            self.auto_chunk_long_text
+        )
+
         # 即使配置为空或没有行为，也保持行为匹配风格
-        # 先清洗文本
+        # 步骤1: 清洗文本
         cleaner = TextCleaner()
         cleaned_text = cleaner.clean(document.raw_text)
 
-        # 如果有配置且有行为定义，执行行为匹配
+        # 步骤2: （可选）LLM段落整理
+        from api.bailian_llm import reorganize_paragraphs
+        processed_text = cleaned_text
+
+        if enable_para_reorg and config and config.behaviors:
+            try:
+                logger.info("开始LLM段落整理...")
+                processed_text = reorganize_paragraphs(cleaned_text)
+                logger.info("LLM段落整理完成")
+            except Exception as e:
+                logger.warning(f"LLM段落整理失败，使用清洗后原始文本: {e}")
+                processed_text = cleaned_text
+
+        # 步骤3: 如果有配置且有行为定义，执行行为匹配
         matches = []
         if config and config.behaviors:
             try:
                 # 创建匹配器
                 if not self._matcher or self._matcher.config != config:
-                    self._matcher = BehaviorMatcher(config)
+                    self._matcher = BehaviorMatcher(
+                        config,
+                        auto_chunk_long_text=auto_chunk
+                    )
 
                 # 执行行为匹配
-                matches = self._matcher.match(cleaned_text)
+                matches = self._matcher.match(processed_text)
             except Exception as e:
-                logger.warning(f"行为匹配执行失败，使用清洗后原始文本: {e}")
+                logger.warning(f"行为匹配执行失败，使用处理后的原始文本: {e}")
                 matches = []
 
         # 生成带标记的文本（即使没有匹配也保持风格）
-        formatted_text = self._format_with_matches(cleaned_text, matches)
+        formatted_text = self._format_with_matches(processed_text, matches)
 
         document.formatted_text = formatted_text
         document.style = self.style
@@ -164,33 +228,85 @@ class BehaviorMatchStyle(StyleFormatter):
         """将匹配结果格式化为带标记的文本"""
         if not matches:
             return text
-        
+
         # 按位置排序
         sorted_matches = sorted(matches, key=lambda m: m.context_start)
-        
+
         result = []
         last_end = 0
-        
+
         for match in sorted_matches:
             # 添加匹配前的文本
             if match.context_start > last_end:
                 result.append(text[last_end:match.context_start])
-            
+
             # 添加上下文和标记
             context_end = min(match.context_end, len(text))
             matched_text = text[match.context_start:context_end]
-            
+
             # 格式化标记
             marked = f"【{match.behavior_name}({match.confidence:.0%})】{matched_text}"
             result.append(marked)
-            
+
             last_end = context_end
-        
+
         # 添加剩余文本
         if last_end < len(text):
             result.append(text[last_end:])
-        
+
+        # 添加行为频率统计汇总
+        if matches:
+            stats_text = self._generate_statistics(matches)
+            result.append('\n\n' + stats_text)
+
         return ''.join(result)
+
+    def _generate_statistics(self, matches: List[Any]) -> str:
+        """生成行为频率统计汇总
+
+        按行为名称分组，统计总次数和不同置信度区间的分布。
+        置信度分类：高 (>= 0.8)、中 (0.6-0.8)、低 (< 0.6)
+        """
+        # 按行为名称分组统计
+        stats = {}
+        for match in matches:
+            name = match.behavior_name
+            if name not in stats:
+                stats[name] = {'total': 0, 'high': 0, 'medium': 0, 'low': 0}
+
+            stats[name]['total'] += 1
+            conf = match.confidence
+            if conf >= 0.8:
+                stats[name]['high'] += 1
+            elif conf >= 0.6:
+                stats[name]['medium'] += 1
+            else:
+                stats[name]['low'] += 1
+
+        # 按总次数降序排序
+        sorted_stats = sorted(
+            stats.items(),
+            key=lambda x: x[1]['total'],
+            reverse=True
+        )
+
+        # 生成汇总文本
+        lines = ['---', '**行为频率统计**', '']
+        lines.append('| 行为名称 | 总计 | 高置信度(≥0.8) | 中置信度(0.6-0.8) | 低置信度(<0.6) |')
+        lines.append('|---------|-----:|---------------:|-----------------:|--------------:|')
+
+        for name, count in sorted_stats:
+            lines.append(
+                f'| {name} | {count["total"]} | {count["high"]} | {count["medium"]} | {count["low"]} |'
+            )
+
+        total_all = sum(c['total'] for _, c in sorted_stats)
+        high_all = sum(c['high'] for _, c in sorted_stats)
+        medium_all = sum(c['medium'] for _, c in sorted_stats)
+        low_all = sum(c['low'] for _, c in sorted_stats)
+        lines.append(f'| **合计** | **{total_all}** | **{high_all}** | **{medium_all}** | **{low_all}** |')
+
+        return '\n'.join(lines)
 
 
 class StyleRegistry:

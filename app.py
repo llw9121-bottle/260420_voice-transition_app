@@ -293,8 +293,19 @@ class VoiceTranscriptionApp:
             # raw 风格，不做处理
             formatter = RawStyle()
 
-        # 执行格式化
-        self.current_document = formatter.format(self.current_document)
+        # 对于 behavior_match 模式，需要调用 LLM 处理，可能耗时较长
+        # 显示处理中提示弹窗
+        processing_window = None
+        if style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors:
+            processing_window = self._show_processing_window()
+
+        try:
+            # 执行格式化
+            self.current_document = formatter.format(self.current_document)
+        finally:
+            # 无论如何都关闭处理中弹窗
+            if processing_window:
+                processing_window.destroy()
 
         # 更新显示
         if self.current_document.formatted_text:
@@ -352,6 +363,34 @@ class VoiceTranscriptionApp:
         self.behavior_config = config
         logger.info(f"关键行为配置已更新: {len(config.behaviors)} 个行为")
         self.main_window.update_status(f"关键行为配置已保存: {len(config.behaviors)} 个行为")
+
+    def _show_processing_window(self):
+        """显示处理中提示窗口（behavior match 需要调用 LLM，耗时较长）"""
+        import customtkinter as ctk
+        # 创建顶级窗口
+        window = ctk.CTkToplevel(self.main_window.root)
+        window.title("处理中")
+        window.geometry("350x120")
+        window.resizable(False, False)
+
+        # 模态显示
+        window.transient(self.main_window.root)
+        # 不 grab_set，保持后台可以运行
+
+        # 提示文本
+        label = ctk.CTkLabel(
+            window,
+            text="正在进行行为匹配分析...\n需要调用大语言模型处理，请稍候...",
+            font=ctk.CTkFont(size=14),
+            justify="center"
+        )
+        label.pack(expand=True, padx=20, pady=20)
+
+        # 更新 GUI 确保窗口显示
+        window.update()
+
+        logger.info("behavior_match 模式开始处理，显示处理中提示")
+        return window
 
     def run(self):
         """运行应用程序"""

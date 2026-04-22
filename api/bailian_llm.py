@@ -270,3 +270,58 @@ def quick_summary(text: str, max_length: int = 200) -> str:
     """快速生成摘要"""
     formatter = LLMFormatter()
     return formatter.generate_summary(text, max_length=max_length)
+
+
+def reorganize_paragraphs(text: str) -> str:
+    """
+    使用LLM整理文本段落
+
+    将原始转录文本按照语义重新整理为自然段落，
+    保持原意不变，只优化段落结构。
+
+    Args:
+        text: 原始清洗后的文本
+
+    Returns:
+        整理后的分段文本（段落间用空行分隔）
+    """
+    client = BailianLLMClient()
+    system_prompt = """你是一个专业的文本整理助手。你的任务是将转录文本按照语义重新整理为自然段落。
+
+要求：
+1. 保持原文所有内容和原意不变，不增不减
+2. 根据语义逻辑将文本分割为合适的段落
+3. 段落之间用空行分隔
+4. 只输出整理后的文本，不要有任何其他说明
+5. 修正明显的口语化表达，但保留原始说话风格"""
+
+    user_prompt = f"""请按照要求整理以下文本的段落结构：
+
+{text}"""
+
+    return client.generate(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        temperature=0.3,
+        max_tokens=len(text) // 2 + 1000
+    )
+
+
+def reorganize_paragraphs_chunked(paragraphs: list[str]) -> list[str]:
+    """
+    逐段整理多个段落
+
+    Args:
+        paragraphs: 原始段落列表
+
+    Returns:
+        整理后的段落列表
+    """
+    results = []
+    for para in paragraphs:
+        if not para.strip():
+            results.append(para)
+            continue
+        result = reorganize_paragraphs(para)
+        results.append(result.strip())
+    return results
