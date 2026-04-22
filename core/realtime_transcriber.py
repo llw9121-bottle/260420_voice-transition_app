@@ -137,7 +137,10 @@ class RealtimeTranscriber:
         # 结果收集
         self.full_transcription = ""
         self.partial_buffer = ""
-        
+
+        # 缓存录音数据（stop后保存需要）
+        self._cached_audio_data: Optional[bytes] = None
+
         # 线程
         self._recognition_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -245,14 +248,20 @@ class RealtimeTranscriber:
         
         # 设置停止事件
         self._stop_event.set()
-        
+
+        # 缓存完整音频数据（在 recorder 清理之前获取）
+        # 不管 save_audio 配置，总是获取一次，因为用户可能在GUI勾选了保存
+        # 这里直接获取 recorder 当前累积的数据，保证在 recorder.stop() 清空之前拿到
+        self._cached_audio_data = self.recorder.get_recorded_data()
+        logger.info(f"[Transcriber] 缓存音频数据完成，大小: {len(self._cached_audio_data)} bytes, save_audio={self.recorder.config.save_audio}")
+
         # 停止音频录制
         try:
             self.recorder.stop()
             logger.debug("[Transcriber] 音频录制已停止")
         except Exception as e:
             logger.error(f"[Transcriber] 停止录音失败: {e}")
-        
+
         # 结束 ASR 会话
         if self.asr_client:
             try:
@@ -389,7 +398,48 @@ class RealtimeTranscriber:
     def is_recording(self) -> bool:
         """是否正在录制"""
         return self.state.is_recording
-    
+
+    def is_paused(self) -> bool:
+        """是否暂停"""
+        return self.recorder.get_is_paused()
+
+    def pause(self) -> None:
+        """
+        暂停录音
+
+        保持 ASR 连接和音频流打开，暂停采集数据。
+        可以调用 resume() 继续录制。
+        """
+        if not self.state.is_recording:
+            logger.warning("[Transcriber] 录音未在进行中，无法暂停")
+            return
+
+        if self.recorder.get_is_paused():
+            logger.debug("[Transcriber] 录音已经暂停，忽略重复暂停请求")
+            return
+
+        logger.info("[Transcriber] 暂停录音")
+        self.recorder.pause()
+        self._update_status("paused")
+
+    def resume(self) -> None:
+        """
+        恢复暂停的录音
+
+        从暂停位置继续采集数据。
+        """
+        if not self.state.is_recording:
+            logger.warning("[Transcriber] 录音未在进行中，无法恢复")
+            return
+
+        if not self.recorder.get_is_paused():
+            logger.debug("[Transcriber] 录音未暂停，无需恢复")
+            return
+
+        logger.info("[Transcriber] 恢复录音")
+        self.recorder.resume()
+        self._update_status("recording")
+
     def get_duration(self) -> float:
         """获取录制时长"""
         if self.state.start_time and self.state.is_recording:
@@ -403,7 +453,36 @@ class RealtimeTranscriber:
         Args:
             output_path: 输出文件路径
         """
-        self.recorder.save_wav(output_path)
+        # 使用 stop 时缓存的数据（因为 recorder.stop() 已经清空了 recorded_frames）
+        # 总是使用缓存，如果缓存为空才回退到直接从 recorder 获取
+        if self._cached_audio_data is not None and len(self._cached_audio_data) > 0:
+            import wave
+
+            # 确保输出目录存在
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # 创建 WAV 文件
+            with wave.open(str(output_path), 'wb') as wf:
+                wf.setnchannels(self.recorder.config.channels)
+                wf.setsampwidth(self.recorder.audio.get_sample_size(self.recorder.config.format))
+                wf.setframerate(self.recorder.config.sample_rate)
+                wf.writeframes(self._cached_audio_data)
+
+            logger.info(f"原始录音已保存: {output_path} ({len(self._cached_audio_data)} bytes) [from cache]");
+        elif self._cached_audio_data is not None and len(self._cached_audio_data) == 0:
+            # 缓存为空（用户没说话或者全暂停），仍然保存一个空文件
+            import wave
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with wave.open(str(output_path), 'wb') as wf:
+                wf.setnchannels(self.recorder.config.channels)
+                wf.setsampwidth(self.recorder.audio.get_sample_size(self.recorder.config.format))
+                wf.setframerate(self.recorder.config.sample_rate)
+                wf.writeframes(b'')
+            logger.warning(f"原始录音为空，保存空文件: {output_path} (0 bytes) [from cache]");
+        else:
+            # 如果没有缓存（异常情况），回退到直接从 recorder 获取
+            logger.debug(f"缓存为空，回退到直接从 recorder 获取");
+            self.recorder.save_wav(output_path)
 
     def get_audio_duration(self) -> float:
         """

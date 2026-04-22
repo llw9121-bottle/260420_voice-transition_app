@@ -34,6 +34,8 @@ class MainWindow:
         # 存储回调函数
         self.on_start_callback: Optional[Callable] = None
         self.on_stop_callback: Optional[Callable] = None
+        self.on_pause_callback: Optional[Callable] = None
+        self.on_resume_callback: Optional[Callable] = None
         self.on_export_callback: Optional[Callable] = None
         self.on_behavior_config_callback: Optional[Callable[[Optional[BehaviorConfig]], None]] = None
 
@@ -97,7 +99,20 @@ class MainWindow:
             height=35
         )
         self.start_btn.pack(side="left", padx=5)
-        
+
+        # 暂停/继续按钮
+        self.pause_btn = ctk.CTkButton(
+            self.button_frame,
+            text="暂停",
+            command=self._on_pause_click,
+            width=100,
+            height=35,
+            state="disabled",
+            fg_color="#CC8800",
+            hover_color="#AA6600"
+        )
+        self.pause_btn.pack(side="left", padx=5)
+
         # 停止按钮
         self.stop_btn = ctk.CTkButton(
             self.button_frame,
@@ -108,7 +123,7 @@ class MainWindow:
             state="disabled"
         )
         self.stop_btn.pack(side="left", padx=5)
-        
+
         # 导出按钮
         self.export_btn = ctk.CTkButton(
             self.button_frame,
@@ -328,18 +343,37 @@ class MainWindow:
     def _on_start_click(self):
         """开始按钮点击"""
         self.start_btn.configure(state="disabled")
+        self.pause_btn.configure(state="normal", text="暂停")
         self.stop_btn.configure(state="normal")
         self.status_label.configure(text="正在录音...")
-        
+
         if self.on_start_callback:
             self.on_start_callback()
-            
+
+    def _on_pause_click(self):
+        """暂停/继续按钮点击"""
+        current_text = self.pause_btn.cget("text")
+
+        if current_text == "暂停":
+            # 切换到暂停状态
+            self.pause_btn.configure(text="继续")
+            self.status_label.configure(text="已暂停")
+            if self.on_pause_callback:
+                self.on_pause_callback()
+        else:
+            # 切换到继续状态
+            self.pause_btn.configure(text="暂停")
+            self.status_label.configure(text="正在录音...")
+            if self.on_resume_callback:
+                self.on_resume_callback()
+
     def _on_stop_click(self):
         """停止按钮点击"""
         self.stop_btn.configure(state="disabled")
+        self.pause_btn.configure(state="disabled", text="暂停")
         self.start_btn.configure(state="normal")
         self.status_label.configure(text="录音已停止")
-        
+
         if self.on_stop_callback:
             self.on_stop_callback()
             
@@ -400,10 +434,13 @@ class MainWindow:
             if 'text' in widget_name or 'entry' in widget_name:
                 return  # 文本框聚焦时不拦截空格
 
-        # 切换开始/停止状态
+        # 切换开始/停止/暂停状态
         if self.start_btn.cget('state') == 'normal':
             # 当前可以开始，点击开始
             self._on_start_click()
+        elif self.pause_btn.cget('state') == 'normal':
+            # 当前正在录音，可以暂停/继续
+            self._on_pause_click()
         elif self.stop_btn.cget('state') == 'normal':
             # 当前可以停止，点击停止
             self._on_stop_click()
@@ -475,19 +512,23 @@ class MainWindow:
         
     # ===== 公共方法 =====
     
-    def set_callbacks(self, on_start=None, on_stop=None, on_export=None,
-                     on_behavior_config=None):
+    def set_callbacks(self, on_start=None, on_stop=None, on_pause=None, on_resume=None,
+                     on_export=None, on_behavior_config=None):
         """
         设置回调函数
 
         Args:
             on_start: 开始录音回调
             on_stop: 停止录音回调
+            on_pause: 暂停录音回调
+            on_resume: 恢复录音回调
             on_export: 导出文档回调
             on_behavior_config: 行为配置回调
         """
         self.on_start_callback = on_start
         self.on_stop_callback = on_stop
+        self.on_pause_callback = on_pause
+        self.on_resume_callback = on_resume
         self.on_export_callback = on_export
         self.on_behavior_config_callback = on_behavior_config
         

@@ -14,7 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **核心功能:**
 - 实时语音实时录音和流式识别
-- 多种文本格式化风格（原始、清洗、分段、关键行为匹配
+- 支持**暂停/继续录音**，长时间录音中间可以休息
+- **自动保存临时文件**防崩溃，意外重启可恢复未完成录音
+- 多种文本格式化风格（原始、清洗、分段、关键行为匹配）
 - 支持自定义行为匹配，使用百炼大模型分析对话内容
 - 导出为 Markdown、JSON、Word 格式
 - 图形界面使用 CustomTkinter

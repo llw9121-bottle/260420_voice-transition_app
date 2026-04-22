@@ -72,8 +72,9 @@ class AudioRecorder:
         
         # 录制状态
         self.is_recording = False
+        self.is_paused = False
         self.record_thread: Optional[threading.Thread] = None
-        
+
         # 音频数据队列（用于实时输出）
         self.audio_queue: Queue = Queue()
 
@@ -213,6 +214,7 @@ class AudioRecorder:
             )
             
             self.is_recording = True
+            self.is_paused = False
             # 清空之前的录制数据
             self.recorded_frames.clear()
             # 重置音量电平统计
@@ -239,7 +241,7 @@ class AudioRecorder:
 
         每当有新的音频数据块可用时被调用。
         """
-        if in_data and self.is_recording:
+        if in_data and self.is_recording and not self.is_paused:
             # 放入队列
             self.audio_queue.put(in_data)
 
@@ -257,21 +259,57 @@ class AudioRecorder:
                 except Exception as e:
                     logger.error(f"音频回调函数执行失败: {e}")
 
-        # 返回继续录制
+        # 返回继续录制（即使暂停也保持流打开）
         return (in_data, pyaudio.paContinue)
     
+    def pause(self) -> None:
+        """
+        暂停录制音频
+
+        保持流和连接打开，只是暂停采集数据。
+        可以调用 resume() 继续录制。
+        """
+        if not self.is_recording:
+            logger.debug("录音未在进行中，无法暂停")
+            return
+
+        if self.is_paused:
+            logger.debug("录音已经暂停，忽略重复暂停请求")
+            return
+
+        logger.info("暂停录音")
+        self.is_paused = True
+
+    def resume(self) -> None:
+        """
+        恢复暂停的录制
+
+        从暂停位置继续采集音频数据。
+        """
+        if not self.is_recording:
+            logger.warning("录音未在进行中，无法恢复")
+            return
+
+        if not self.is_paused:
+            logger.debug("录音未暂停，无需恢复")
+            return
+
+        logger.info("恢复录音")
+        self.is_paused = False
+
     def stop(self) -> None:
         """
         停止录制音频
-        
+
         停止音频流并释放资源。
         """
         if not self.is_recording:
             logger.debug("录音未在进行中，无需停止")
             return
-        
+
         logger.info("停止录音")
         self.is_recording = False
+        self.is_paused = False
         self._cleanup()
     
     def _cleanup(self) -> None:
@@ -439,6 +477,10 @@ class AudioRecorder:
         """重置音量电平统计（每次录音开始时调用）"""
         self._current_rms = 0.0
         self._max_rms = 0.0
+
+    def get_is_paused(self) -> bool:
+        """获取当前是否暂停"""
+        return self.is_paused
 
     def __del__(self):
         """析构时清理资源"""

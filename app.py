@@ -49,7 +49,10 @@ class VoiceTranscriptionApp:
         # 创建日志目录
         (project_root / "logs").mkdir(exist_ok=True)
         (project_root / "output").mkdir(exist_ok=True)
-        
+        # 创建临时目录（用于自动保存未完成录音）
+        self.tmp_dir = project_root / ".tmp"
+        self.tmp_dir.mkdir(exist_ok=True)
+
         # 应用程序状态
         self.is_recording = False
         self.current_document: Optional[FormattedDocument] = None
@@ -58,6 +61,10 @@ class VoiceTranscriptionApp:
         # 实时显示状态：分离已确认文本和当前中间结果
         self.confirmed_text = ""      # 已确认完成的文本
         self.current_partial = ""     # 当前正在识别的中间结果
+
+        # 自动保存临时文件配置
+        self._auto_save_timer_id: Optional[str] = None
+        self._current_tmp_file: Optional[Path] = None
         
         # 创建主窗口
         self.main_window = MainWindow()
@@ -67,6 +74,9 @@ class VoiceTranscriptionApp:
 
         # 检查API Key配置，未配置时弹出友好提示
         self._check_api_configuration_on_startup()
+
+        # 检查是否有未完成的录音（上次崩溃遗留）
+        self._check_unsaved_recording()
         
     def _setup_callbacks(self):
         """设置 GUI 回调函数"""
@@ -77,6 +87,8 @@ class VoiceTranscriptionApp:
         self.main_window.set_callbacks(
             on_start=self._on_start_recording,
             on_stop=self._on_stop_recording,
+            on_pause=self._on_pause_recording,
+            on_resume=self._on_resume_recording,
             on_export=self._on_export_document,
             on_behavior_config=self._on_behavior_config
         )
@@ -147,6 +159,9 @@ class VoiceTranscriptionApp:
 
             # 启动时长更新定时器（每秒更新一次）
             self._update_duration()
+
+            # 启动自动保存（防崩溃）
+            self._start_auto_save()
         except Exception as e:
             logger.error(f"启动实时转录失败: {e}")
             threading.Thread(target=self._mock_recording, daemon=True).start()
@@ -160,6 +175,22 @@ class VoiceTranscriptionApp:
             self.main_window.update_volume(volume)
             # 1秒后再次更新
             self.main_window.root.after(1000, self._update_duration)
+
+    def _on_pause_recording(self):
+        """暂停录音回调"""
+        logger.info("暂停录音")
+        if hasattr(self, 'transcriber') and self.transcriber:
+            self.transcriber.pause()
+        self.is_recording = False  # 暂停时不再更新时长
+
+    def _on_resume_recording(self):
+        """恢复录音回调"""
+        logger.info("恢复录音")
+        if hasattr(self, 'transcriber') and self.transcriber:
+            self.transcriber.resume()
+        self.is_recording = True
+        # 恢复时长更新定时器
+        self._update_duration()
         
     def _mock_recording(self):
         """模拟录音过程（用于测试）"""
@@ -222,6 +253,9 @@ class VoiceTranscriptionApp:
         logger.info("停止录音")
         self.is_recording = False
 
+        # 停止自动保存
+        self._stop_auto_save()
+
         # 停止转录器并获取最终完整文本
         if hasattr(self, 'transcriber') and self.transcriber and self.current_document:
             full_text = self.transcriber.stop()
@@ -250,9 +284,11 @@ class VoiceTranscriptionApp:
             self.current_document.raw_text = total_text
 
             # 自动保存原始录音 WAV 文件到默认输出目录
+            # 仅在用户勾选了"保存原始音频"选项时才保存
             from config.settings import settings
             output_dir = Path(settings.document.output_dir)
-            if self.current_document.title and output_dir:
+            save_audio = self.main_window.get_save_audio()
+            if save_audio and self.current_document.title and output_dir:
                 wav_path = output_dir / f"{self.current_document.title}.wav"
                 try:
                     self.transcriber.save_audio_wav(wav_path)
@@ -274,6 +310,7 @@ class VoiceTranscriptionApp:
 
         # 不需要LLM处理的情况：格式化已经完成，可以直接提示导出
         # 需要LLM处理的情况：会在格式化完成回调中提示导出
+        style = self.main_window.get_selected_style()
         need_llm_processing = (
             (style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors) or
             (style == "paragraphs" and self.main_window.get_enable_llm_paragraphs())
@@ -421,6 +458,8 @@ class VoiceTranscriptionApp:
         Args:
             file_path: 导出的文件路径
         """
+        # 导出完成，清理临时文件
+        self._stop_auto_save()
         logger.info(f"文档已导出: {file_path}")
         self.main_window.update_status(f"文档已导出: {file_path.name}")
 
@@ -487,6 +526,156 @@ class VoiceTranscriptionApp:
             # 在主窗口加载后显示提示
             self.main_window.root.after(500, show_config_prompt)
             logger.warning("DashScope API Key 未配置，提示用户配置")
+
+    def _check_unsaved_recording(self):
+        """
+        检查是否有未完成的录音（上次应用崩溃遗留），如果有提示用户恢复。
+        """
+        import json
+        import glob
+        from datetime import datetime
+
+        # 查找所有临时文件
+        tmp_files = list(self.tmp_dir.glob("unsaved_*.json"))
+
+        if not tmp_files:
+            # 没有未完成的录音
+            return
+
+        # 按修改时间排序，最新的在最后
+        tmp_files.sort(key=lambda p: p.stat().st_mtime)
+        latest_tmp = tmp_files[-1]
+
+        # 读取创建时间
+        try:
+            with open(latest_tmp, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            create_time = datetime.fromtimestamp(latest_tmp.stat().st_mtime)
+            time_str = create_time.strftime('%Y-%m-%d %H:%M:%S')
+            text_length = len(data.get('confirmed_text', ''))
+
+            def ask_recovery():
+                import tkinter.messagebox as messagebox
+                result = messagebox.askyesno(
+                    "发现未完成的录音",
+                    f"检测到上次应用退出时遗留了一个未完成的录音:\n\n"
+                    f"创建时间: {time_str}\n"
+                    f"文本长度: {text_length} 字\n\n"
+                    f"是否恢复这个录音到编辑器？"
+                )
+                if result:
+                    self._restore_unsaved_recording(data)
+                    # 删除临时文件（恢复后不再需要）
+                    try:
+                        latest_tmp.unlink()
+                    except Exception as e:
+                        logger.debug(f"删除临时文件失败: {e}")
+
+            # 在主窗口加载后询问用户
+            self.main_window.root.after(800, ask_recovery)
+            logger.info(f"发现未完成录音: {latest_tmp.name}，已提示用户恢复")
+
+        except Exception as e:
+            logger.warning(f"读取未完成录音失败: {e}")
+
+    def _restore_unsaved_recording(self, data: dict):
+        """
+        恢复未完成的录音到编辑器。
+
+        Args:
+            data: 保存的临时数据
+        """
+        # 恢复文本内容
+        self.confirmed_text = data.get('confirmed_text', '')
+        self.current_partial = data.get('current_partial', '')
+
+        # 创建文档对象
+        from core.formatter.base import FormattedDocument, FormattingStyle
+        from datetime import datetime
+
+        self.current_document = FormattedDocument(
+            title=data.get('title', '恢复的未完成录音'),
+            raw_text=self.confirmed_text + self.current_partial,
+            style=FormattingStyle.RAW,
+            session_id=data.get('session_id', f'recovered_{datetime.now().timestamp()}'),
+            created_at=datetime.now()
+        )
+        self.current_document.word_count = len(self.confirmed_text)
+
+        # 更新显示
+        self._update_gui_display()
+        self.main_window.update_status("已恢复未完成的录音")
+        logger.info(f"成功恢复未完成录音，字数: {len(self.confirmed_text)}")
+
+    def _start_auto_save(self):
+        """
+        启动自动保存定时器，每隔 30 秒自动保存当前转录内容。
+        """
+        # 停止之前的定时器（如果有）
+        self._stop_auto_save()
+
+        # 创建新的临时文件
+        timestamp = int(datetime.now().timestamp())
+        self._current_tmp_file = self.tmp_dir / f"unsaved_{timestamp}.json"
+
+        # 启动定时器，每 30 秒保存一次
+        self._auto_save_loop()
+        logger.debug("自动保存已启动，间隔 30 秒")
+
+    def _auto_save_loop(self):
+        """自动保存循环"""
+        if self.is_recording:
+            self._auto_save()
+            # 30 秒后再次保存
+            self._auto_save_timer_id = self.main_window.root.after(30000, self._auto_save_loop)
+
+    def _auto_save(self):
+        """
+        自动保存当前转录内容到临时文件。
+        """
+        if not self._current_tmp_file:
+            return
+
+        try:
+            import json
+            # 保存当前状态
+            data = {
+                'confirmed_text': self.confirmed_text,
+                'current_partial': self.current_partial,
+                'title': self.current_document.title if self.current_document else '未命名',
+                'session_id': self.current_document.session_id if self.current_document else '',
+                'saved_at': datetime.now().isoformat()
+            }
+
+            with open(self._current_tmp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            logger.debug(f"自动保存完成: {self._current_tmp_file.name} ({len(self.confirmed_text)} 字)")
+
+        except Exception as e:
+            logger.warning(f"自动保存失败: {e}")
+
+    def _stop_auto_save(self):
+        """
+        停止自动保存，清理临时文件。
+        """
+        # 取消定时器
+        if self._auto_save_timer_id:
+            try:
+                self.main_window.root.after_cancel(self._auto_save_timer_id)
+            except Exception as e:
+                logger.debug(f"取消自动保存定时器失败: {e}")
+            self._auto_save_timer_id = None
+
+        # 删除当前临时文件（录音正常完成后不需要保留）
+        if self._current_tmp_file and self._current_tmp_file.exists():
+            try:
+                self._current_tmp_file.unlink()
+                logger.debug("自动保存临时文件已清理")
+            except Exception as e:
+                logger.debug(f"删除临时文件失败: {e}")
+
+        self._current_tmp_file = None
 
     def run(self):
         """运行应用程序"""

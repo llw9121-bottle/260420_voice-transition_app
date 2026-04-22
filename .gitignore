@@ -37,6 +37,7 @@ ENV/
 output/
 logs/
 test_output/
+.tmp/
 
 # Audio files (recordings)
 *.wav
