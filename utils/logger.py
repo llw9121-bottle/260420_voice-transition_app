@@ -52,7 +52,8 @@ class LoggerConfig:
         )
         
         # 添加控制台输出
-        if self.console_output:
+        # PyInstaller console=False 模式下 stdout 可能为 None，需要检查
+        if self.console_output and sys.stdout is not None:
             logger.add(
                 sys.stdout,
                 level=self.log_level,

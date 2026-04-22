@@ -38,7 +38,9 @@ class VoiceTranscriptionApp:
         """初始化应用程序"""
         # 配置日志
         logger.remove()
-        logger.add(sys.stderr, level="INFO")
+        # PyInstaller console=False 模式下 stderr 可能为 None，需要检查
+        if sys.stderr is not None:
+            logger.add(sys.stderr, level="INFO")
         logger.add(
             project_root / "logs" / "app_{time:YYYY-MM-DD}.log",
             rotation="1 day",
