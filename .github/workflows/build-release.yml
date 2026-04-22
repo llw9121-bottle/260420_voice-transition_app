@@ -20,23 +20,24 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: 'pip'
 
       - name: Install dependencies
         run: |
+          choco install upx -y
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller upx
+          pip install pyinstaller
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller app.spec --upx-dir="${env:PROGRAMFILES}\upx"
+          pyinstaller app.spec --upx-dir="C:\ProgramData\chocolatey\bin"
 
       - name: Zip output
         run: |
@@ -54,10 +55,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: 'pip'
