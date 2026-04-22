@@ -152,26 +152,92 @@ class MainWindow:
         """创建转录文本区"""
         self.transcription_frame = ctk.CTkFrame(self.content_frame)
         self.transcription_frame.grid(row=0, column=0, padx=(10, 5), pady=10, sticky="nsew")
-        self.transcription_frame.grid_columnconfigure(0, weight=1)
+        self.transcription_frame.grid_columnconfigure(1, weight=1)
         self.transcription_frame.grid_rowconfigure(1, weight=1)
-        
-        # 标签
+
+        # 左侧标签
         self.transcription_label = ctk.CTkLabel(
             self.transcription_frame,
             text="实时转录",
             font=ctk.CTkFont(size=14, weight="bold")
         )
         self.transcription_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
-        
-        # 文本框
+
+        # 中间搜索框区域
+        self.search_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
+        self.search_frame.grid(row=0, column=1, padx=(0, 5), pady=(10, 5), sticky="ew")
+
+        # 搜索输入框
+        self.search_entry = ctk.CTkEntry(
+            self.search_frame,
+            placeholder_text="搜索...",
+            width=150,
+            height=28
+        )
+        self.search_entry.pack(side="left", padx=(0, 5))
+
+        # 上一个匹配按钮
+        self.prev_btn = ctk.CTkButton(
+            self.search_frame,
+            text="▲",
+            command=self._search_prev,
+            width=30,
+            height=28,
+            fg_color="#555555",
+            hover_color="#333333"
+        )
+        self.prev_btn.pack(side="left", padx=(0, 2))
+
+        # 下一个匹配按钮
+        self.next_btn = ctk.CTkButton(
+            self.search_frame,
+            text="▼",
+            command=self._search_next,
+            width=30,
+            height=28,
+            fg_color="#555555",
+            hover_color="#333333"
+        )
+        self.next_btn.pack(side="left", padx=(0, 5))
+
+        # 右侧选项区域
+        self.options_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
+        self.options_frame.grid(row=0, column=2, padx=5, pady=(10, 5), sticky="e")
+
+        # 滚动锁定复选框 (Task 10)
+        self.scroll_lock_var = ctk.BooleanVar(value=False)
+        self.scroll_lock_check = ctk.CTkCheckBox(
+            self.options_frame,
+            text="滚动锁定",
+            variable=self.scroll_lock_var,
+            onvalue=True,
+            offvalue=False,
+            font=ctk.CTkFont(size=11)
+        )
+        self.scroll_lock_check.pack(side="right")
+
+        # 文本框（占据整行）
         self.transcription_text = ctk.CTkTextbox(
             self.transcription_frame,
             wrap="word",
             font=ctk.CTkFont(size=12)
         )
-        self.transcription_text.grid(row=1, column=0, padx=10, pady=(5, 10), sticky="nsew")
+        self.transcription_text.grid(row=1, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="nsew")
         self.transcription_text.insert("0.0", "等待开始录音...")
         self.transcription_text.configure(state="disabled")
+
+        # 搜索状态
+        self._search_matches: list[str] = []  # 存储所有匹配位置
+        self._current_match_index: int = -1
+        self._search_last_term: str = ""
+
+        # 配置搜索高亮标签
+        self.transcription_text.tag_config("search_highlight", background="#ffff00", foreground="#000000")
+        self.transcription_text.tag_config("search_current", background="#ff8800", foreground="#000000")
+
+        # 绑定搜索事件
+        self.search_entry.bind("<Return>", self._on_search_enter)
+        self.search_entry.bind("<KeyRelease>", self._on_search_key)
         
     def _create_settings_panel(self):
         """创建设置面板"""
@@ -535,21 +601,152 @@ class MainWindow:
     def update_transcription(self, text: str, append: bool = False):
         """
         更新转录文本显示
-        
+
         Args:
             text: 要显示的文本
             append: 是否追加到现有文本
         """
         self.transcription_text.configure(state="normal")
-        
+
         if append:
             self.transcription_text.insert("end", text)
         else:
             self.transcription_text.delete("0.0", "end")
             self.transcription_text.insert("0.0", text)
-            
+            # 清空搜索状态
+            self._clear_search()
+
         self.transcription_text.configure(state="disabled")
-        self.transcription_text.see("end")
+
+        # 滚动锁定未勾选时才自动滚动到底部
+        if not self.scroll_lock_var.get():
+            self.transcription_text.see("end")
+
+    # ===== 搜索功能 (Task 7) =====
+
+    def _clear_search(self):
+        """清空搜索高亮和状态"""
+        self.transcription_text.tag_remove("search_highlight", "0.0", "end")
+        self.transcription_text.tag_remove("search_current", "0.0", "end")
+        self._search_matches = []
+        self._current_match_index = -1
+        self._search_last_term = ""
+
+    def _do_search(self):
+        """执行搜索，高亮所有匹配项"""
+        search_term = self.search_entry.get().strip()
+        if not search_term:
+            self._clear_search()
+            return
+
+        # 如果搜索词变化，重新搜索
+        if search_term != self._search_last_term:
+            self._clear_search()
+            self._search_last_term = search_term
+
+        # 获取全文内容
+        content = self.transcription_text.get("0.0", "end-1c")
+        if not content:
+            return
+
+        # 不区分大小写搜索
+        content_lower = content.lower()
+        term_lower = search_term.lower()
+        term_len = len(search_term)
+
+        # 查找所有匹配位置
+        matches = []
+        start = 0
+        while True:
+            pos = content_lower.find(term_lower, start)
+            if pos < 0:
+                break
+            # 转换为 tkinter 位置格式 (line.char)
+            line = content[:pos].count('\n')
+            char = pos - content[:pos].rfind('\n') - 1
+            start_pos = f"{line+1}.{char}"
+            end_pos = f"{line+1}.{char + term_len}"
+            matches.append((start_pos, end_pos))
+            start = pos + 1
+
+        # 高亮所有匹配项
+        self.transcription_text.tag_remove("search_highlight", "0.0", "end")
+        self.transcription_text.tag_remove("search_current", "0.0", "end")
+
+        for start_pos, end_pos in matches:
+            self.transcription_text.tag_add("search_highlight", start_pos, end_pos)
+
+        self._search_matches = [start for start, _ in matches]
+
+        if self._search_matches:
+            self._current_match_index = 0
+            self._highlight_current()
+            self._goto_current()
+            logger.debug(f"搜索完成，找到 {len(self._search_matches)} 个匹配项")
+        else:
+            logger.debug("未找到匹配项")
+
+    def _highlight_current(self):
+        """高亮当前匹配项"""
+        self.transcription_text.tag_remove("search_current", "0.0", "end")
+        if 0 <= self._current_match_index < len(self._search_matches):
+            start_pos = self._search_matches[self._current_match_index]
+            search_term = self.search_entry.get().strip()
+            # 计算结束位置
+            line_char = start_pos.split('.')
+            line = int(line_char[0])
+            char = int(line_char[1])
+            end_pos = f"{line}.{char + len(search_term)}"
+            self.transcription_text.tag_add("search_current", start_pos, end_pos)
+
+    def _goto_current(self):
+        """滚动到当前匹配项"""
+        if 0 <= self._current_match_index < len(self._search_matches):
+            pos = self._search_matches[self._current_match_index]
+            self.transcription_text.see(pos)
+
+    def _search_next(self):
+        """搜索下一个匹配项"""
+        if not self._search_matches:
+            self._do_search()
+            return
+        if self._current_match_index < len(self._search_matches) - 1:
+            self._current_match_index += 1
+        else:
+            self._current_match_index = 0  # 循环到开头
+        self._highlight_current()
+        self._goto_current()
+
+    def _search_prev(self):
+        """搜索上一个匹配项"""
+        if not self._search_matches:
+            self._do_search()
+            return
+        if self._current_match_index > 0:
+            self._current_match_index -= 1
+        else:
+            self._current_match_index = len(self._search_matches) - 1  # 循环到末尾
+        self._highlight_current()
+        self._goto_current()
+
+    def _on_search_enter(self, event):
+        """回车键触发搜索下一个"""
+        self._search_next()
+
+    def _on_search_key(self, event):
+        """按键释放时实时搜索"""
+        # 延迟一点搜索，让输入更流畅
+        self.transcription_text.after(100, self._do_search)
+
+    # ===== 公共方法获取状态 =====
+
+    def is_scroll_lock_enabled(self) -> bool:
+        """获取是否启用滚动锁定
+
+        Returns:
+            True 表示锁定，False 表示自动滚动
+        """
+        return self.scroll_lock_var.get()
         
     def update_status(self, text: str):
         """
