@@ -5,6 +5,7 @@
 """
 
 import json
+import sys
 import customtkinter as ctk
 from pathlib import Path
 from typing import Optional, Callable
@@ -12,6 +13,13 @@ from typing import Optional, Callable
 from config.settings import settings
 from core.formatter.base import FormattedDocument, FormattingStyle
 from utils.logger import logger
+
+# 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
+if sys.platform.startswith('win'):
+    DEFAULT_FONT_FAMILY = "Microsoft YaHei"
+else:
+    # macOS/Linux 使用系统默认字体
+    DEFAULT_FONT_FAMILY = None
 
 
 class MainWindow:
@@ -26,8 +34,10 @@ class MainWindow:
         # 配置文件路径（存储用户偏好）
         self.USER_CONFIG_FILE = Path(__file__).parent.parent / ".user_config.json"
 
-        # 加载保存的主题设置，默认跟随系统
-        saved_theme = self._load_appearance_mode()
+        # 加载保存的用户偏好设置
+        saved_config = self._load_user_config()
+        saved_theme = saved_config.get("appearance_mode", "System")
+        saved_font_size = saved_config.get("font_size", 16)
 
         # 设置 CustomTkinter 外观
         ctk.set_appearance_mode(saved_theme)
@@ -41,6 +51,8 @@ class MainWindow:
 
         # 创建主题变量（必须在 root 创建之后）
         self.appearance_mode = ctk.StringVar(value=saved_theme)
+        # 创建字体大小变量
+        self.font_size = ctk.IntVar(value=saved_font_size)
 
         # 存储回调函数
         self.on_start_callback: Optional[Callable] = None
@@ -93,7 +105,7 @@ class MainWindow:
         self.title_label = ctk.CTkLabel(
             self.control_frame,
             text="语音实时转录系统",
-            font=ctk.CTkFont(size=18, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
         )
         self.title_label.pack(side="left", padx=10, pady=10)
         
@@ -176,7 +188,7 @@ class MainWindow:
         self.transcription_label = ctk.CTkLabel(
             self.transcription_frame,
             text="📝 实时转录",
-            font=ctk.CTkFont(size=14, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=14, weight="bold")
         )
         self.transcription_label.grid(row=0, column=0, padx=(12, 0), pady=(12, 6), sticky="w")
 
@@ -217,6 +229,27 @@ class MainWindow:
         )
         self.next_btn.pack(side="left", padx=(0, 4))
 
+        # 字体大小标签
+        self.font_size_label = ctk.CTkLabel(
+            self.search_frame,
+            text="🔤 字体:",
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
+            text_color="gray"
+        )
+        self.font_size_label.pack(side="left", padx=(8, 2))
+
+        # 字体大小选择下拉框
+        self.font_size_menu = ctk.CTkOptionMenu(
+            self.search_frame,
+            values=["16", "18", "20", "22", "24"],
+            variable=self.font_size,
+            command=self._on_font_size_change,
+            width=50,
+            height=30,
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10)
+        )
+        self.font_size_menu.pack(side="left", padx=(0, 0))
+
         # 右侧选项区域
         self.options_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
         self.options_frame.grid(row=0, column=2, padx=(5, 12), pady=(10, 5), sticky="e")
@@ -229,7 +262,7 @@ class MainWindow:
             variable=self.scroll_lock_var,
             onvalue=True,
             offvalue=False,
-            font=ctk.CTkFont(size=11)
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
         )
         self.scroll_lock_check.pack(side="right")
 
@@ -237,7 +270,7 @@ class MainWindow:
         self.transcription_text = ctk.CTkTextbox(
             self.transcription_frame,
             wrap="word",
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(size=self.font_size.get())
         )
         self.transcription_text.grid(row=1, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="nsew")
         self.transcription_text.insert("0.0", "等待开始录音...")
@@ -265,7 +298,7 @@ class MainWindow:
         self.style_label = ctk.CTkLabel(
             self.settings_frame,
             text="格式化风格",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
         )
         self.style_label.pack(anchor="w", padx=10, pady=(10, 5))
 
@@ -296,7 +329,7 @@ class MainWindow:
         # 2. 行为匹配配置按钮
         self.behavior_btn = ctk.CTkButton(
             self.settings_frame,
-            text="⚙ 配置关键行为 (Ctrl+B)",
+            text="⚙ 配置关键行为",
             command=self._on_behavior_config_click,
             height=36
         )
@@ -319,7 +352,7 @@ class MainWindow:
         self.save_audio_label = ctk.CTkLabel(
             self.settings_frame,
             text="音频选项",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
         )
         self.save_audio_label.pack(anchor="w", padx=10, pady=(0, 5))
 
@@ -342,7 +375,7 @@ class MainWindow:
         self.device_label = ctk.CTkLabel(
             self.settings_frame,
             text="音频输入设备",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
         )
         self.device_label.pack(anchor="w", padx=10, pady=(0, 5))
 
@@ -379,7 +412,7 @@ class MainWindow:
         self.recording_indicator = ctk.CTkLabel(
             self.status_frame,
             text="●",
-            font=ctk.CTkFont(size=18),
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18),
             text_color="gray50"
         )
         self.recording_indicator.pack(side="left", padx=(12, 0))
@@ -388,7 +421,7 @@ class MainWindow:
         self.status_label = ctk.CTkLabel(
             self.status_frame,
             text="就绪",
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12)
         )
         self.status_label.pack(side="left", padx=10, pady=8)
 
@@ -416,7 +449,7 @@ class MainWindow:
         self.volume_label = ctk.CTkLabel(
             self.status_frame,
             text="音量:",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
             text_color="gray"
         )
         self.volume_label.pack(side="right", padx=(5, 2))
@@ -429,14 +462,14 @@ class MainWindow:
             command=self._on_theme_change,
             width=80,
             height=22,
-            font=ctk.CTkFont(size=10)
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10)
         )
         self.theme_menu.pack(side="right", padx=(2, 5))
 
         self.theme_label = ctk.CTkLabel(
             self.status_frame,
             text="🎨 主题:",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
             text_color="gray"
         )
         self.theme_label.pack(side="right", padx=(8, 2))
@@ -445,7 +478,7 @@ class MainWindow:
         self.duration_label = ctk.CTkLabel(
             self.status_frame,
             text=" ⏱  00:00",
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12)
         )
         self.duration_label.pack(side="right", padx=(0, 8))
 
@@ -534,10 +567,14 @@ class MainWindow:
         self.root.bind('<space>', self._on_space_shortcut)
         # Esc: 停止录音
         self.root.bind('<Escape>', self._on_escape_shortcut)
-        # Ctrl+S: 导出文档
+        # Ctrl+S: 导出文档（所有平台）
         self.root.bind('<Control-s>', self._on_ctrl_s_shortcut)
-        # Ctrl+B: 打开行为配置
+        # Command+S: 导出文档（macOS 习惯）
+        self.root.bind('<Command-s>', self._on_ctrl_s_shortcut)
+        # Ctrl+B: 打开行为配置（所有平台）
         self.root.bind('<Control-b>', self._on_ctrl_b_shortcut)
+        # Command+B: 打开行为配置（macOS 习惯）
+        self.root.bind('<Command-b>', self._on_ctrl_b_shortcut)
 
     def _on_space_shortcut(self, event):
         """空格键快捷键处理"""
@@ -894,40 +931,45 @@ class MainWindow:
         """关闭窗口"""
         self.root.destroy()
 
-    # ===== 主题切换相关方法 =====
+    # ===== 用户配置持久化 =====
 
-    def _load_appearance_mode(self) -> str:
+    def _load_user_config(self) -> dict:
         """
-        加载保存的外观模式
+        加载保存的用户配置
 
         Returns:
-            保存的模式名称，默认 System
+            配置字典，包含所有用户偏好
         """
-        default_mode = "System"
+        default_config = {
+            "appearance_mode": "System",
+            "font_size": 16
+        }
 
         if not self.USER_CONFIG_FILE.exists():
-            return default_mode
+            return default_config
 
         try:
             with open(self.USER_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            mode = data.get("appearance_mode", default_mode)
-            # 验证模式有效性
-            if mode in ["System", "Light", "Dark"]:
-                logger.debug(f"加载保存的主题模式: {mode}")
-                return mode
-            else:
-                return default_mode
+                config = json.load(f)
+            # 合并默认值，确保新增配置有默认值
+            merged = default_config.copy()
+            merged.update(config)
+            # 验证主题模式有效性
+            if merged.get("appearance_mode") not in ["System", "Light", "Dark"]:
+                merged["appearance_mode"] = default_config["appearance_mode"]
+            # 验证字体大小有效性
+            font_size = merged.get("font_size")
+            if not isinstance(font_size, int) or font_size < 16 or font_size > 24:
+                merged["font_size"] = default_config["font_size"]
+            logger.debug(f"加载用户配置: {merged}")
+            return merged
         except Exception as e:
-            logger.warning(f"加载主题配置失败，使用默认: {e}")
-            return default_mode
+            logger.warning(f"加载用户配置失败，使用默认: {e}")
+            return default_config
 
-    def _save_appearance_mode(self, mode: str) -> None:
+    def _save_user_config(self) -> None:
         """
-        保存外观模式到配置文件
-
-        Args:
-            mode: 模式名称
+        保存所有用户配置到配置文件
         """
         try:
             # 读取现有配置如果存在
@@ -936,16 +978,19 @@ class MainWindow:
                 with open(self.USER_CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
 
-            # 更新主题设置
-            config["appearance_mode"] = mode
+            # 更新所有当前设置
+            config["appearance_mode"] = self.appearance_mode.get()
+            config["font_size"] = self.font_size.get()
 
             # 保存回去
             with open(self.USER_CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
 
-            logger.debug(f"保存主题模式: {mode}")
+            logger.debug(f"保存用户配置: {config}")
         except Exception as e:
-            logger.warning(f"保存主题配置失败: {e}")
+            logger.warning(f"保存用户配置失败: {e}")
+
+    # ===== 主题切换相关方法 =====
 
     def _on_theme_change(self, mode: str) -> None:
         """
@@ -957,8 +1002,24 @@ class MainWindow:
         # 应用主题
         ctk.set_appearance_mode(mode)
         # 保存用户选择
-        self._save_appearance_mode(mode)
+        self._save_user_config()
         logger.info(f"主题已切换: {mode}")
+
+    # ===== 字体大小调整 =====
+
+    def _on_font_size_change(self, size_str: str) -> None:
+        """
+        字体大小改变回调
+
+        Args:
+            size_str: 选择的字体大小字符串
+        """
+        size = int(size_str)
+        # 更新文本框字体
+        self.transcription_text.configure(font=ctk.CTkFont(size=size))
+        # 保存配置
+        self._save_user_config()
+        logger.info(f"文本字体已调整: {size}pt")
 
 
 def main():

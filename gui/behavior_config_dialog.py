@@ -8,6 +8,7 @@
 
 import json
 import re
+import sys
 import customtkinter as ctk
 from tkinter import messagebox
 from tkinter import filedialog
@@ -16,6 +17,13 @@ from typing import List, Optional, Callable
 from loguru import logger
 
 from core.formatter.behavior_matcher import BehaviorDefinition, BehaviorConfig
+
+# 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
+if sys.platform.startswith('win'):
+    DEFAULT_FONT_FAMILY = "Microsoft YaHei"
+else:
+    # macOS/Linux 使用系统默认字体
+    DEFAULT_FONT_FAMILY = None
 
 
 class BehaviorConfigDialog:
@@ -173,7 +181,7 @@ class BehaviorConfigDialog:
         self.title_label = ctk.CTkLabel(
             self.main_frame,
             text="关键行为配置",
-            font=ctk.CTkFont(size=18, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
         )
         self.title_label.pack(anchor="w", pady=(0, 5))
 
@@ -181,7 +189,7 @@ class BehaviorConfigDialog:
         self.desc_label = ctk.CTkLabel(
             self.main_frame,
             text=f"配置 {self.MIN_BEHAVIORS}-{self.MAX_BEHAVIORS} 个关键行为，用于识别转录文本中的特定行为模式。",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
             text_color="gray"
         )
         self.desc_label.pack(anchor="w", pady=(0, 10))
@@ -194,7 +202,7 @@ class BehaviorConfigDialog:
         self.options_label = ctk.CTkLabel(
             self.options_frame,
             text="高级选项",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
         )
         self.options_label.pack(anchor="w", padx=10, pady=(5, 5))
 
@@ -238,23 +246,23 @@ class BehaviorConfigDialog:
         header_frame.pack_propagate(False)
 
         # 序号列
-        num_label = ctk.CTkLabel(header_frame, text="#", width=30, font=ctk.CTkFont(weight="bold"))
+        num_label = ctk.CTkLabel(header_frame, text="#", width=30, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
         num_label.pack(side="left", padx=6)
 
         # 名称列
-        name_label = ctk.CTkLabel(header_frame, text="行为名称", width=100, font=ctk.CTkFont(weight="bold"))
+        name_label = ctk.CTkLabel(header_frame, text="行为名称", width=100, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
         name_label.pack(side="left", padx=6)
 
         # 描述列
-        desc_label = ctk.CTkLabel(header_frame, text="行为描述", width=240, font=ctk.CTkFont(weight="bold"))
+        desc_label = ctk.CTkLabel(header_frame, text="行为描述", width=240, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
         desc_label.pack(side="left", padx=6, fill="x", expand=True)
 
         # 示例列
-        examples_label = ctk.CTkLabel(header_frame, text="示例", width=200, font=ctk.CTkFont(weight="bold"))
+        examples_label = ctk.CTkLabel(header_frame, text="示例", width=200, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
         examples_label.pack(side="left", padx=6)
 
         # 操作列
-        action_label = ctk.CTkLabel(header_frame, text="操作", width=60, font=ctk.CTkFont(weight="bold"))
+        action_label = ctk.CTkLabel(header_frame, text="操作", width=60, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
         action_label.pack(side="left", padx=6)
         
     def _refresh_behavior_rows(self):
@@ -383,7 +391,7 @@ class BehaviorConfigDialog:
         self.count_label = ctk.CTkLabel(
             btn_frame,
             text=f"当前: {len(self.behaviors)} 个 (最少 {self.MIN_BEHAVIORS}, 最多 {self.MAX_BEHAVIORS})",
-            font=ctk.CTkFont(size=11)
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
         )
         self.count_label.pack(side="left", padx=15)
 
@@ -583,14 +591,14 @@ class BehaviorConfigDialog:
         title_label = ctk.CTkLabel(
             dialog,
             text="选择预置模板",
-            font=ctk.CTkFont(size=16, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=16, weight="bold")
         )
         title_label.pack(padx=20, pady=(15, 5))
 
         desc_label = ctk.CTkLabel(
             dialog,
             text="选择一个预置模板快速开始，可编辑修改后保存",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
             text_color="gray"
         )
         desc_label.pack(padx=20, pady=(0, 10))

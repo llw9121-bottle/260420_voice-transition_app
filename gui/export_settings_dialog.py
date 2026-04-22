@@ -6,6 +6,7 @@
 - 默认输出目录
 """
 
+import sys
 import customtkinter as ctk
 from tkinter import filedialog
 from pathlib import Path
@@ -13,6 +14,13 @@ from typing import Optional
 
 from config.settings import settings
 from utils.logger import logger
+
+# 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
+if sys.platform.startswith('win'):
+    DEFAULT_FONT_FAMILY = "Microsoft YaHei"
+else:
+    # macOS/Linux 使用系统默认字体
+    DEFAULT_FONT_FAMILY = None
 
 
 class ExportSettingsDialog:
@@ -65,7 +73,7 @@ class ExportSettingsDialog:
         self.title_label = ctk.CTkLabel(
             self.main_frame,
             text="导出设置",
-            font=ctk.CTkFont(size=18, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
         )
         self.title_label.pack(anchor="w", pady=(0, 15))
 
@@ -86,7 +94,7 @@ class ExportSettingsDialog:
         label = ctk.CTkLabel(
             output_dir_frame,
             text="默认输出目录",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
         )
         label.pack(anchor="w", padx=10, pady=(5, 5))
 
@@ -96,7 +104,7 @@ class ExportSettingsDialog:
 
         self.dir_entry = ctk.CTkEntry(
             dir_frame,
-            font=ctk.CTkFont(size=11)
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
         )
         self.dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.dir_entry.insert(0, self.current_output_dir)
@@ -124,7 +132,7 @@ class ExportSettingsDialog:
         info_label = ctk.CTkLabel(
             info_frame,
             text=info_text,
-            font=ctk.CTkFont(size=10),
+            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10),
             text_color="gray",
             justify="left"
         )
