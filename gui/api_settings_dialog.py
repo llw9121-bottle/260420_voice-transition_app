@@ -218,12 +218,6 @@ class APISettingsDialog:
             self.bailian_entry.insert(0, initial_value)
         self.bailian_entry.pack(fill="x", padx=5, pady=(0, 5))
 
-    def _toggle_show_key(self):
-        """切换显示/隐藏 API Key"""
-        if self.show_key_var.get():
-            self.dashscope_entry.configure(show="")
-        else:
-            self.dashscope_entry.configure(show="•")
 
     def _create_button_bar(self):
         """创建底部按钮栏"""

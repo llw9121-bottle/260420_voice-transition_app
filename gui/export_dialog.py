@@ -402,7 +402,7 @@ class ExportDialog:
             # 使用自定义文件名
             custom = self.custom_filename.get().strip()
             if custom:
-                return custom
+                return NamingStrategy._sanitize_filename(custom)
             # 如果自定义为空，使用默认时间戳
             template = "timestamp"
             
