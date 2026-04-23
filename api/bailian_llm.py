@@ -293,28 +293,36 @@ def reorganize_paragraphs(text: str, language: str = "zh") -> str:
         # English prompt
         system_prompt = """You are a professional text reorganization assistant. Your task is to reorganize the transcribed text into natural paragraphs according to semantics.
 
-Requirements:
-1. Keep all content and original meaning unchanged, do not add or remove anything
-2. Split the text into appropriate paragraphs according to semantic logic
-3. Separate paragraphs with blank lines
-4. Only output the reorganized text, do not add any other explanation
-5. Fix obvious colloquialisms but keep the original speaking style"""
+【Core Requirements】
+- You are only responsible for paragraph splitting, you are NOT allowed to modify, condense, summarize or rewrite any content
+- You must **keep every word of the original text intact**, strictly forbidden to add, delete, or rewrite anything
+- You must strictly preserve the original order of all sentences, do not adjust word order
 
-        user_prompt = f"""Please reorganize the paragraph structure of the following text according to the requirements:
+Paragraph Splitting Rules:
+1. Split the text into appropriate paragraphs according to semantic logic
+2. Separate paragraphs with blank lines
+3. Only output the reorganized text, do not add any other explanation
+4. Do not fix colloquialisms, keep the original speaking style intact"""
+
+        user_prompt = f"""Please only reorganize the paragraph structure of the following text according to the requirements, **keep all original content intact**:
 
 {text}"""
     else:
         # Chinese prompt (default)
         system_prompt = """你是一个专业的文本整理助手。你的任务是将转录文本按照语义重新整理为自然段落。
 
-要求：
-1. 保持原文所有内容和原意不变，不增不减
-2. 根据语义逻辑将文本分割为合适的段落
-3. 段落之间用空行分隔
-4. 只输出整理后的文本，不要有任何其他说明
-5. 修正明显的口语化表达，但保留原始说话风格"""
+【核心要求】
+- 你只负责分段，不允许修改、浓缩、归纳原文内容
+- 必须**完整保留原文的每一个字**，严格禁止增加、删除、改写任何内容
+- 必须严格保留原文的所有语句顺序，不得调整语序
 
-        user_prompt = f"""请按照要求整理以下文本的段落结构：
+分段规则：
+1. 根据语义逻辑将文本分割为合适的段落
+2. 段落之间用空行分隔
+3. 只输出整理后的文本，不要有任何其他说明
+4. 不修正口语化表达，完整保留原始说话风格"""
+
+        user_prompt = f"""请按照要求仅对以下文本进行分段整理，**完整保留所有原文内容**：
 
 {text}"""
 
