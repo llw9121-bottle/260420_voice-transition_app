@@ -243,6 +243,7 @@ Please output the analysis result in the JSON format specified in the system pro
                 # 后续块：行为定义已经在第一块发送过，只需要提示
                 prompt = f"""Continue analyzing the next chunk of the transcribed text{chunk_info}.
 The key behavior definitions are the same as in the first chunk, no need to repeat.
+**IMPORTANT: Only analyze the text in this current chunk, do not repeat matches from previous chunks.**
 
 【Transcribed Text】
 {text}
@@ -264,6 +265,7 @@ Please output the analysis result in the JSON format specified in the system pro
                 # 后续块：行为定义已经在第一块发送过，只需要提示
                 prompt = f"""请继续分析转录文本的下一块{chunk_info}。
 关键行为定义与第一块相同，无需重复，请直接分析。
+**重要提示：只分析当前这一块内的文本，不要重复匹配之前块已经匹配过的行为。**
 
 【转录文本】
 {text}
@@ -415,9 +417,12 @@ Please output the analysis result in the JSON format specified in the system pro
                 if not matched_text:
                     continue  # 跳过没有原文的匹配
 
-                context_start, context_end = self._find_context_position(
-                    original_text, matched_text
-                )
+                position = self._find_context_position(original_text, matched_text)
+                if position is None:
+                    # 找不到匹配位置，说明原文引用不正确，跳过这个匹配
+                    continue
+
+                context_start, context_end = position
 
                 match = BehaviorMatch(
                     behavior_name=item.get("behavior_name", "未知"),
@@ -439,31 +444,36 @@ Please output the analysis result in the JSON format specified in the system pro
             logger.error(f"解析响应失败: {e}")
             return []
     
-    def _find_context_position(self, text: str, matched_text: str) -> tuple:
-        """查找匹配文本在原文中的位置"""
+    def _find_context_position(self, text: str, matched_text: str) -> tuple[int, int] | None:
+        """查找匹配文本在原文中的位置
+
+        Returns:
+            (start, end) 找到位置；None 表示找不到，应该跳过此匹配
+        """
         if not matched_text:
-            return 0, len(text)
-        
+            return None
+
         # 尝试精确匹配
         idx = text.find(matched_text)
         if idx >= 0:
             return idx, idx + len(matched_text)
-        
+
         # 尝试模糊匹配（去除空格和标点）
         # 使用ASCII标点集代替\p{P}以支持Windows系统
         punctuation = r'[.,;:!?\-\[\]{}()<>\/\\"\'\`~@#$%^&*()_+\-=|\\]'
         simplified_text = re.sub(rf'[\s{punctuation}]', '', text)
         simplified_match = re.sub(rf'[\s{punctuation}]', '', matched_text)
-        
+
         if simplified_match and simplified_match in simplified_text:
             # 计算大致位置
             ratio = simplified_text.index(simplified_match) / len(simplified_text)
             start = int(len(text) * ratio)
             end = min(start + len(matched_text) + 10, len(text))
             return start, end
-        
-        # 默认返回全文
-        return 0, len(text)
+
+        # 找不到匹配位置
+        logger.warning(f"在当前文本块中找不到匹配原文: {matched_text[:100]}...")
+        return None
 
 
 # 便捷函数
