@@ -102,7 +102,7 @@
 #### Windows 用户
 1. 打开项目的 Releases 页面：https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v1.1.0
 2. 找到最新版本，下载 `VoiceTranscription-Windows.zip`
-3. 解压到任意文件夹（建议路径不要有中文）
+3. 解压到任意文件夹（建议选择解压到“压缩文件名”文件夹，用专门的文件夹存放程序，启动后会自动生成程序相关配置文件，避免文件混乱，路径不要有中文）
 4. 双击 `VoiceTranscription.exe` 启动
 5. **首次启动会自动弹出 API Key 配置对话框**，粘贴你的 API Key 点击保存
 6. 重启应用，开始使用！
@@ -110,7 +110,7 @@
 #### macOS 用户
 1. 打开项目的 Releases 页面：https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v1.1.0
 2. 找到最新版本，下载 `VoiceTranscription-macOS.zip`
-3. 解压到「应用程序」文件夹
+3. 解压到「应用程序」文件夹，注意用专门的文件夹存放程序，启动后会自动生成程序相关配置文件，避免文件混乱。
 4. **首次打开必须右键点击图标 → 选择「打开」**（因为未签名，不能直接双击）
 5. 之后就可以正常双击打开了
 6. 配置 API Key 后重启使用
