@@ -126,15 +126,17 @@ class BehaviorMatcher:
 分析要求：
 1. 仔细阅读转录文本
 2. 判断文本中是否体现了指定的关键行为
-3. 对于匹配的行为，提取原文引用并评估置信度
-4. 只输出JSON格式结果，不要有任何其他说明
+3. **只输出匹配到的行为**，不匹配的行为不需要输出
+4. 对于匹配的行为，提取原文引用并评估置信度（范围 0.0-1.0）
+5. 如果同一行为在文本中出现多次，每次匹配都输出一条记录
+6. 不要重复匹配同一段文本
+7. 只输出JSON格式结果，不要有任何其他说明
 
-输出格式必须是以下JSON数组：
+输出格式必须是以下JSON数组（数组为空表示没有匹配到任何行为）：
 [
   {
     "behavior_name": "行为名称",
-    "matched": true/false,
-    "original_text": "匹配的原文（如matched为false则为空）",
+    "original_text": "匹配的原文",
     "confidence": 0.85,
     "explanation": "简短说明为什么匹配"
   }
@@ -146,15 +148,17 @@ class BehaviorMatcher:
 Analysis Requirements:
 1. Read the transcribed text carefully
 2. Determine whether the text reflects the specified key behaviors
-3. For matched behaviors, extract the original text reference and evaluate the confidence
-4. Output only JSON format, do not add any other explanation
+3. **Only output matched behaviors**, do not output behaviors that are not matched
+4. For matched behaviors, extract the original text reference and evaluate the confidence (range 0.0-1.0)
+5. If the same behavior appears multiple times, output one record for each match
+6. Do not repeatedly match the same text segment
+7. Output only JSON format, do not add any other explanation
 
-Output format must be a JSON array as follows:
+Output format must be a JSON array as follows (empty array means no behaviors matched):
 [
   {
     "behavior_name": "Behavior Name",
-    "matched": true/false,
-    "original_text": "Matched original text (empty if matched is false)",
+    "original_text": "Matched original text",
     "confidence": 0.85,
     "explanation": "Brief explanation why it matches"
   }
@@ -203,8 +207,14 @@ Output format must be a JSON array as follows:
         logger.info(f"BehaviorMatcher初始化完成，配置了{len(config.behaviors)}个行为，"
                     f"自动分块: {auto_chunk_long_text}")
     
-    def _build_prompt(self, text: str) -> str:
-        """构建LLM提示词"""
+    def _build_prompt(self, text: str, is_first_chunk: bool = True, chunk_info: str = "") -> str:
+        """构建LLM提示词
+
+        Args:
+            text: 转录文本
+            is_first_chunk: 是否是第一个分块（只有第一个块需要完整行为定义）
+            chunk_info: 分块信息提示，如 "（这是第 2/5 块文本）"
+        """
         # 构建行为定义部分
         behaviors_desc = []
         for i, behavior in enumerate(self.config.behaviors, 1):
@@ -218,7 +228,9 @@ Output format must be a JSON array as follows:
         behaviors_text = '\n'.join(behaviors_desc)
 
         if self.language.startswith("en"):
-            prompt = f"""Please analyze the following transcribed text and identify whether it contains the following key behaviors:
+            if is_first_chunk:
+                # 第一块：完整输出行为定义
+                prompt = f"""Please analyze the following transcribed text and identify whether it contains the following key behaviors{chunk_info}:
 
 【Key Behavior Definitions】
 {behaviors_text}
@@ -227,11 +239,31 @@ Output format must be a JSON array as follows:
 {text}
 
 Please output the analysis result in the JSON format specified in the system prompt."""
+            else:
+                # 后续块：行为定义已经在第一块发送过，只需要提示
+                prompt = f"""Continue analyzing the next chunk of the transcribed text{chunk_info}.
+The key behavior definitions are the same as in the first chunk, no need to repeat.
+
+【Transcribed Text】
+{text}
+
+Please output the analysis result in the JSON format specified in the system prompt."""
         else:
-            prompt = f"""请分析以下转录文本，识别是否包含以下关键行为：
+            if is_first_chunk:
+                # 第一块：完整输出行为定义
+                prompt = f"""请分析以下转录文本，识别是否包含以下关键行为{chunk_info}：
 
 【关键行为定义】
 {behaviors_text}
+
+【转录文本】
+{text}
+
+请按照系统指令中的JSON格式输出分析结果。"""
+            else:
+                # 后续块：行为定义已经在第一块发送过，只需要提示
+                prompt = f"""请继续分析转录文本的下一块{chunk_info}。
+关键行为定义与第一块相同，无需重复，请直接分析。
 
 【转录文本】
 {text}
@@ -279,9 +311,9 @@ Please output the analysis result in the JSON format specified in the system pro
         logger.info(f"超长文本分块：估算 {estimated_tokens} tokens，分割为 {len(chunks)} 块")
         return chunks
 
-    def _match_chunk(self, text: str, text_offset: int = 0) -> List[BehaviorMatch]:
+    def _match_chunk(self, text: str, text_offset: int = 0, is_first_chunk: bool = True, chunk_info: str = "") -> List[BehaviorMatch]:
         """匹配单个文本块，text_offset用于校正位置偏移"""
-        prompt = self._build_prompt(text)
+        prompt = self._build_prompt(text, is_first_chunk=is_first_chunk, chunk_info=chunk_info)
 
         # 调用LLM
         response = self.llm.generate(
@@ -328,10 +360,19 @@ Please output the analysis result in the JSON format specified in the system pro
             chunks = self._split_into_chunks(text)
             all_matches = []
             text_offset = 0
+            total_chunks = len(chunks)
 
             for i, chunk in enumerate(chunks):
-                logger.debug(f"处理第 {i+1}/{len(chunks)} 块，长度 {len(chunk)} 字符")
-                chunk_matches = self._match_chunk(chunk, text_offset)
+                chunk_num = i + 1
+                # 块信息提示
+                if self.language.startswith("en"):
+                    chunk_info = f" (this is chunk {chunk_num}/{total_chunks})"
+                else:
+                    chunk_info = f"（这是第 {chunk_num}/{total_chunks} 块）"
+                # 是否是第一个块（只有第一个块输出完整行为定义）
+                is_first = (i == 0)
+                logger.debug(f"处理第 {chunk_num}/{total_chunks} 块，长度 {len(chunk)} 字符")
+                chunk_matches = self._match_chunk(chunk, text_offset, is_first_chunk=is_first, chunk_info=chunk_info)
                 all_matches.extend(chunk_matches)
                 text_offset += len(chunk) + 2  # +2 是段落间的空行 \n\n
 
@@ -363,21 +404,21 @@ Please output the analysis result in the JSON format specified in the system pro
                 return []
             
             for item in data:
-                # 只处理匹配的项目
-                if not item.get("matched", False):
-                    continue
-                
+                # 现在输出中只有匹配的行为，不需要检查 matched 字段
                 # 检查置信度
                 confidence = item.get("confidence", 0.5)
                 if confidence < self.config.min_confidence:
                     continue
-                
+
                 # 提取原文位置
                 matched_text = item.get("original_text", "")
+                if not matched_text:
+                    continue  # 跳过没有原文的匹配
+
                 context_start, context_end = self._find_context_position(
                     original_text, matched_text
                 )
-                
+
                 match = BehaviorMatch(
                     behavior_name=item.get("behavior_name", "未知"),
                     original_text=matched_text,
@@ -385,7 +426,7 @@ Please output the analysis result in the JSON format specified in the system pro
                     context_start=context_start,
                     context_end=context_end
                 )
-                
+
                 matches.append(match)
             
             logger.info(f"解析到{len(matches)}个行为匹配")

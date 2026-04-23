@@ -278,7 +278,9 @@ class VoiceTranscriptionApp:
         self.main_window.transcription_text.delete("0.0", "end")
         self.main_window.transcription_text.insert("0.0", full_display)
         self.main_window.transcription_text.configure(state="disabled")
-        self.main_window.transcription_text.see("end")
+        # 滚动锁定未勾选时才自动滚动到底部
+        if not self.main_window.is_scroll_lock_enabled():
+            self.main_window.transcription_text.see("end")
 
     def _append_transcription(self, text: str, is_final: bool = True):
         """
