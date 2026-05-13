@@ -100,7 +100,7 @@
 > **Releases 是什么？** 是 GitHub 提供的版本发布页面，你可以在这里下载到已经打包好、直接就能运行的程序，不用自己配置环境。
 
 #### Windows 用户
-1. 打开项目的 Releases 页面：https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v1.1.0
+1. 打开项目的 Releases 页面：https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v1.1.1
 2. 找到最新版本，下载 `VoiceTranscription-Windows.zip`
 3. 解压到任意文件夹（建议选择解压到“压缩文件名”文件夹，用专门的文件夹存放程序，启动后会自动生成程序相关配置文件，避免文件混乱，路径不要有中文）
 4. 双击 `VoiceTranscription.exe` 启动
@@ -108,7 +108,7 @@
 6. 重启应用，开始使用！
 
 #### macOS 用户
-1. 打开项目的 Releases 页面：https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v1.1.0
+1. 打开项目的 Releases 页面：https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v1.1.1
 2. 找到最新版本，下载 `VoiceTranscription-macOS.zip`
 3. 解压到「应用程序」文件夹，注意用专门的文件夹存放程序，启动后会自动生成程序相关配置文件，避免文件混乱。
 4. **首次打开必须右键点击图标 → 选择「打开」**（因为未签名，不能直接双击）
