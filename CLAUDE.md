@@ -3,38 +3,47 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Table of Contents
+
+- [Quick Start](#quick-start)
 - [Project Overview](#project-overview)
 - [Architecture](#architecture)
 - [Common Commands](#common-commands)
 - [Development Guide](#development-guide)
+- [Common Issues](#common-issues)
+
+## Quick Start
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 检查 API 配置（会自动弹出 GUI 配置向导）
+python app.py
+
+# 3. 开始使用
+```
 
 ## Project Overview
 
 语音实时转录系统 - 是一个基于阿里云 DashScope 实时语音识别的桌面应用程序。
 
-**核心功能:**
-- 实时语音录音和流式识别，边录边显示结果
-- **首次启动GUI配置向导**: 自动检测 API Key，未配置弹出图形对话框引导设置，无需手动编辑文件
-- **多语言ASR支持**: 支持中文、粤语、英文、日语、韩语、德语、法语、西班牙语、俄语等多种识别语言
-- **VAD参数可配置**: 可调节静音检测时长，控制断句灵敏度（适合对话/朗读等不同场景）
-- 支持**暂停/继续录音**，长时间录音中间可以休息
-- **自动保存临时文件**防崩溃，意外重启可恢复未完成录音
-- 多种文本格式化风格（原始、清洗、分段、关键行为匹配）
-- **自定义行为匹配**: 使用百炼大模型分析对话内容，识别用户关注的特定行为，自动统计频率
-- **内置行为模板**: 预置会议分析、面试分析、心理咨询等常用场景模板，一键加载
-- **行为配置导入/导出**: 支持配置备份和多设备同步
-- **中英双语LLM提示词**: 根据识别语言自动选择对应语言提示词，获得最佳效果
-- **文本搜索与滚动锁定**: 支持关键词搜索高亮，可锁定自动滚动方便查看历史
-- **主题切换**: 支持浅色/深色/跟随系统三种主题
-- **音量可视化**: 实时显示录音音量电平，直观判断麦克风输入
-- **录音时长显示**: 实时显示已录音时长，掌握进度
-- **红色闪烁状态指示灯**: 一眼识别是否正在录音
-- **快捷键支持**: 空格开始/暂停、Esc 停止、Ctrl+S 导出等
-- 导出为 Markdown、JSON、Word 三种格式
-- **记住上次导出路径**: 默认使用上次选择的目录
-- 图形界面使用 CustomTkinter
+### 核心功能
 
-**技术栈:**
+- 实时流式语音识别，边录边显结果
+- 多语言ASR支持（中/粤/英/日/韩/德/法/西/俄）
+- VAD静音检测参数可配置，支持暂停/继续录音
+- 防崩溃自动保存，意外重启可恢复
+- 四种格式化风格：原始/清洗/分段/LLM行为匹配
+- 内置行为模板（会议/面试/心理咨询），支持配置导入导出
+- 中英双语LLM提示词，根据识别语言自动切换
+- 文本搜索高亮、滚动锁定、主题切换
+- 音量可视化、时长显示、红色闪烁录音指示灯
+- 快捷键支持（空格开始/暂停、Esc停止、Ctrl+S导出）
+- 支持 Markdown/JSON/Word 三格式导出，记住上次导出路径
+- 首次启动GUI配置向导，无需手动编辑配置文件
+
+### 技术栈
+
 - Python 3.10+
 - PyAudio - 音频录制
 - DashScope - 实时语音识别 (ASR)
@@ -129,26 +138,13 @@ python run_gui.py
 
 ### 运行测试
 ```bash
-# 音频设备测试
-python core/audio_recorder.py
+# 单元测试（无需 API Key，可离线运行）
+pytest tests/ -v -m "not requires_api"
 
-# 实时转录功能测试（需要 API Key）
-python test_realtime_asr.py
-
-# 导出功能测试（无需 GUI）
-python test_export_simple.py
-
-# 完整导出测试
-python test_export.py
-
-# 行为匹配测试（需要 API Key）
-python test_behavior_matcher_llm.py
-
-# 格式化功能测试
-python test_phase4_formatter.py
-
-# 录音功能测试
-python test_recording.py
+# 端到端功能测试（需要 API Key）
+python tests/e2e/test_realtime_asr.py
+python tests/e2e/test_export.py
+python tests/e2e/test_behavior_matcher_llm.py
 ```
 
 ## Development Guide
@@ -246,3 +242,24 @@ pytest tests/test_config.py -v
 - 端到端测试：验证完整功能流程，需要有效 API Key
 - 遵循 3A 结构：Arrange、Act、Assert
 - 依赖必须隔离，禁止单元测试触碰真实 API
+
+## Common Issues
+
+### PyAudio 安装问题 (Windows)
+
+- Python 3.10+ 可能无法直接 pip install pyaudio
+- 解决方案: 下载 prebuilt wheel 或使用 `pip install pipwin && pipwin install pyaudio`
+
+### 麦克风权限 (macOS)
+
+- 需要在系统偏好设置中授予终端/IDE 麦克风访问权限
+
+### DashScope WebSocket 连接失败
+
+- 检查网络连接和 API Key 有效性
+- 确保 API Key 有 DashScope 实时语音识别服务权限
+
+### LLM 行为匹配 Token 溢出
+
+- 超长文本会自动分块处理
+- 每块独立分析，结果自动合并
