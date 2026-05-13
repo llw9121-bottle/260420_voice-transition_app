@@ -300,7 +300,7 @@ class DashScopeASRClient:
         Returns:
             是否启动成功
         """
-        # Validate API key first - Fail Fast
+        # 快速失败：优先验证API Key
         if not self.config.api_key or self.config.api_key.strip() == "":
             logger.error("[ASR] API Key未配置，请设置有效的DashScope API Key")
             if on_error:

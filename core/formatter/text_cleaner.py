@@ -90,9 +90,8 @@ class TextCleaner:
     
     def _remove_start_fillers(self, text: str) -> str:
         """去除开头的填充词"""
-        # 循环去除，处理多个连续填充词
         result = text
-        for _ in range(3):  # 最多处理3层
+        for _ in range(3):
             new_result = self.START_FILLER_PATTERN.sub('', result)
             if new_result == result:
                 break
@@ -135,17 +134,11 @@ class TextCleaner:
     
     def _fix_punctuation(self, text: str) -> str:
         """修复标点符号"""
-        # 合并重复标点
         result = self.REPEATED_PUNCT_PATTERN.sub(r'\1', text)
-        
-        # 确保中文标点后有空格（可选）
-        # result = re.sub(r'([。！？；：])([^\\s])', r'\1 \2', result)
-        
         return result
     
     def _normalize_spaces(self, text: str) -> str:
         """标准化空格"""
-        # 合并多个空格
         result = self.EXTRA_SPACE_PATTERN.sub(' ', text)
         return result
     

@@ -290,7 +290,7 @@ def reorganize_paragraphs(text: str, language: str = "zh") -> str:
 
     # 根据语言选择对应提示词
     if language.startswith("en"):
-        # English prompt
+        # 英文提示词
         system_prompt = """You are a professional text reorganization assistant. Your task is to reorganize the transcribed text into natural paragraphs according to semantics.
 
 【Core Requirements】
@@ -308,7 +308,7 @@ Paragraph Splitting Rules:
 
 {text}"""
     else:
-        # Chinese prompt (default)
+        # 中文提示词（默认）
         system_prompt = """你是一个专业的文本整理助手。你的任务是将转录文本按照语义重新整理为自然段落。
 
 【核心要求】

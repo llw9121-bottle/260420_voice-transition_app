@@ -37,8 +37,6 @@ class AppException(Exception):
         }
 
 
-# ==================== API相关异常 ====================
-
 class APIException(AppException):
     """API调用异常基类"""
     pass
@@ -80,8 +78,6 @@ class BailianAPIException(APIException):
         self.status_code = status_code
 
 
-# ==================== 音频相关异常 ====================
-
 class AudioException(AppException):
     """音频处理异常基类"""
     pass
@@ -115,8 +111,6 @@ class AudioStreamException(AudioException):
     def __init__(self, message: str = "音频流操作失败"):
         super().__init__(message, "AUDIO_STREAM_ERROR")
 
-
-# ==================== 文档相关异常 ====================
 
 class DocumentException(AppException):
     """文档处理异常基类"""
@@ -162,8 +156,6 @@ class DocumentSaveException(DocumentException):
         super().__init__(message, "DOCUMENT_SAVE_ERROR", details)
 
 
-# ==================== 配置相关异常 ====================
-
 class ConfigException(AppException):
     """配置异常基类"""
     pass
@@ -193,8 +185,6 @@ class ConfigValidationException(ConfigException):
             details["field"] = field
         super().__init__(message, "CONFIG_VALIDATION_ERROR", details)
 
-
-# ==================== 异常处理工具函数 ====================
 
 def handle_exception(
     exception: Exception,

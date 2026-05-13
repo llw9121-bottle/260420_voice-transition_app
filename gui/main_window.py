@@ -365,7 +365,7 @@ class MainWindow:
         self.settings_frame = ctk.CTkFrame(self.settings_scroll_frame, fg_color="transparent")
         self.settings_frame.pack(fill="both", expand=True)
 
-        # ===== 卡片 1: 格式化风格（最常用，放上方）
+        # 卡片 1: 格式化风格（最常用，放上方）
         style_card = ctk.CTkFrame(self.settings_frame)
         style_card.pack(fill="x", padx=8, pady=5)
         style_inner = ctk.CTkFrame(style_card, fg_color="transparent")
@@ -399,7 +399,7 @@ class MainWindow:
         )
         self.llm_para_check.pack(anchor="w")
 
-        # ===== 卡片 2: 功能按钮区
+        # 卡片 2: 功能按钮区
         buttons_card = ctk.CTkFrame(self.settings_frame)
         buttons_card.pack(fill="x", padx=8, pady=5)
         buttons_inner = ctk.CTkFrame(buttons_card, fg_color="transparent")
@@ -423,7 +423,7 @@ class MainWindow:
         )
         self.export_settings_btn.pack(fill="x")
 
-        # ===== 卡片 3: 音频选项
+        # 卡片 3: 音频选项
         audio_card = ctk.CTkFrame(self.settings_frame)
         audio_card.pack(fill="x", padx=8, pady=5)
         audio_inner = ctk.CTkFrame(audio_card, fg_color="transparent")
@@ -447,7 +447,7 @@ class MainWindow:
         )
         self.save_audio_switch.pack(anchor="w")
 
-        # ===== 卡片 4: ASR 识别设置
+        # 卡片 4: ASR 识别设置
         asr_card = ctk.CTkFrame(self.settings_frame)
         asr_card.pack(fill="x", padx=8, pady=5)
         asr_inner = ctk.CTkFrame(asr_card, fg_color="transparent")
@@ -525,7 +525,7 @@ class MainWindow:
         )
         self.vad_hint_label.pack(anchor="e", padx=5)
 
-        # ===== 卡片 5: 音频输入设备选择
+        # 卡片 5: 音频输入设备选择
         device_card = ctk.CTkFrame(self.settings_frame)
         device_card.pack(fill="x", padx=8, pady=5)
         device_inner = ctk.CTkFrame(device_card, fg_color="transparent")
@@ -568,7 +568,7 @@ class MainWindow:
         self.available_devices: list[tuple[int, str]] = []  # (index, name)
         self.selected_device_index: Optional[int] = None
 
-        # ===== 卡片 6: API 设置
+        # 卡片 6: API 设置
         api_card = ctk.CTkFrame(self.settings_frame)
         api_card.pack(fill="x", padx=8, pady=5)
         api_inner = ctk.CTkFrame(api_card, fg_color="transparent")
@@ -672,9 +672,7 @@ class MainWindow:
 
         # 闪烁动画控制
         self._is_recording_flashing = False
-        
-    # ===== 回调方法 =====
-    
+
     def _on_start_click(self):
         """开始按钮点击"""
         self.start_btn.configure(state="disabled")
@@ -866,9 +864,7 @@ class MainWindow:
         from gui.export_settings_dialog import ExportSettingsDialog
         dialog = ExportSettingsDialog(self.root)
         self.root.wait_window(dialog.window)
-        
-    # ===== 公共方法 =====
-    
+
     def set_callbacks(self, on_start=None, on_stop=None, on_pause=None, on_resume=None,
                      on_export=None, on_behavior_config=None):
         """
@@ -912,8 +908,6 @@ class MainWindow:
         # 滚动锁定未勾选时才自动滚动到底部
         if not self.scroll_lock_var.get():
             self.transcription_text.see("end")
-
-    # ===== 搜索功能 (Task 7) =====
 
     def _clear_search(self):
         """清空搜索高亮和状态"""
@@ -1028,8 +1022,6 @@ class MainWindow:
         """按键释放时实时搜索"""
         # 延迟一点搜索，让输入更流畅
         self.transcription_text.after(100, self._do_search)
-
-    # ===== 公共方法获取状态 =====
 
     def is_scroll_lock_enabled(self) -> bool:
         """获取是否启用滚动锁定
@@ -1156,8 +1148,6 @@ class MainWindow:
         """关闭窗口"""
         self.root.destroy()
 
-    # ===== 用户配置持久化 =====
-
     def _load_user_config(self) -> dict:
         """
         加载保存的用户配置
@@ -1224,8 +1214,6 @@ class MainWindow:
         except Exception as e:
             logger.warning(f"保存用户配置失败: {e}")
 
-    # ===== 主题切换相关方法 =====
-
     def _on_theme_change(self, mode: str) -> None:
         """
         主题模式切换回调
@@ -1238,8 +1226,6 @@ class MainWindow:
         # 保存用户选择
         self._save_user_config()
         logger.info(f"主题已切换: {mode}")
-
-    # ===== 字体大小调整 =====
 
     def _on_font_size_change(self, size_str: str) -> None:
         """

@@ -427,9 +427,7 @@ class BehaviorConfigDialog:
             hover_color=AppColors.SUCCESS_HOVER
         )
         self.save_btn.pack(side="right", padx=2)
-        
-    # ===== 事件处理方法 =====
-    
+
     def _add_behavior(self):
         """添加新行为"""
         if len(self.behaviors) >= self.MAX_BEHAVIORS:
@@ -585,8 +583,6 @@ class BehaviorConfigDialog:
 
         # 关闭对话框
         self.window.destroy()
-
-    # ===== 模板、导入、导出功能 =====
 
     def _open_template_dialog(self):
         """打开模板选择对话框"""

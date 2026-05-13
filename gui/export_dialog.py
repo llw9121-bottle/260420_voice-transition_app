@@ -371,9 +371,7 @@ class ExportDialog:
             hover_color=AppColors.SUCCESS_HOVER
         )
         self.export_btn.pack(side="right", padx=3)
-        
-    # ===== 事件处理方法 =====
-    
+
     def _load_last_output_dir(self) -> str:
         """
         加载上次保存的输出目录
