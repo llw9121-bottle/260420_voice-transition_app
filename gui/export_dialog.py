@@ -16,6 +16,7 @@ from datetime import datetime
 from loguru import logger
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.naming import NamingStrategy
+from gui.theme import AppColors, AppFonts
 
 # 获取正确的项目根目录（支持PyInstaller打包）
 from config.settings import project_root
@@ -51,7 +52,7 @@ class ExportDialog:
 
         # 创建对话框
         self.window = ctk.CTkToplevel(parent)
-        self.window.title("💾 导出文档")
+        self.window.title("导出文档")
         self.window.geometry("620x620")
         self.window.minsize(580, 550)
 
@@ -81,7 +82,7 @@ class ExportDialog:
         # 标题
         self.title_label = ctk.CTkLabel(
             self.main_frame,
-            text="💾 导出文档配置",
+            text="导出文档配置",
             font=ctk.CTkFont(size=18, weight="bold")
         )
         self.title_label.pack(anchor="w", pady=(0, 15))
@@ -110,7 +111,7 @@ class ExportDialog:
         title = self.document.title or "未命名文档"
         title_label = ctk.CTkLabel(
             info_frame,
-            text=f"📄 文档: {title}",
+            text=f"文档: {title}",
             font=ctk.CTkFont(size=12, weight="bold")
         )
         title_label.pack(anchor="w", padx=12, pady=(8, 2))
@@ -121,38 +122,127 @@ class ExportDialog:
             info_frame,
             text=stats_text,
             font=ctk.CTkFont(size=10),
-            text_color="gray"
+            text_color=AppColors.TEXT_MUTED
         )
         stats_label.pack(anchor="w", padx=12, pady=(2, 8))
 
     def _create_format_section(self):
-        """创建导出格式选择区域"""
-        format_frame = ctk.CTkFrame(self.main_frame)
+        """创建导出格式选择区域（卡片式布局）"""
+        format_frame = ctk.CTkFrame(self.main_frame, fg_color='transparent')
         format_frame.pack(fill="x", pady=(0, 8))
 
         label = ctk.CTkLabel(
             format_frame,
-            text="📄 导出格式",
-            font=ctk.CTkFont(size=12, weight="bold")
+            text="导出格式",
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
-        label.pack(anchor="w", padx=12, pady=(8, 5))
+        label.pack(anchor="w", padx=2, pady=(0, 6))
 
-        # 格式选项
+        # 格式选项（卡片式布局，带详细说明）
         formats = [
-            ("markdown", "Markdown (.md) - 推荐，带格式和行为标记"),
-            ("docx", "Word (.docx) - Microsoft Word 文档"),
-            ("json", "JSON (.json) - 结构化数据，完整原始信息"),
+            {
+                "value": "markdown",
+                "title": "Markdown",
+                "extension": ".md",
+                "description": "轻量级格式，带完整行为标记，适合 GitHub、文档网站",
+                "icon": "📝",
+                "recommended": True
+            },
+            {
+                "value": "docx",
+                "title": "Word 文档",
+                "extension": ".docx",
+                "description": "Microsoft Word 格式，适合正式文档和打印",
+                "icon": "📄",
+                "recommended": False
+            },
+            {
+                "value": "json",
+                "title": "JSON 数据",
+                "extension": ".json",
+                "description": "结构化数据格式，包含所有元数据和片段信息，适合开发",
+                "icon": "🔧",
+                "recommended": False
+            },
         ]
 
-        for value, text in formats:
+        # 为每个格式创建卡片
+        self.format_cards = {}
+        for fmt in formats:
+            # 外层卡片（视觉边界）
+            card = ctk.CTkFrame(format_frame, corner_radius=8)
+            card.pack(fill="x", pady=4)
+
+            # 存储卡片引用以便更新选中状态
+            self.format_cards[fmt["value"]] = card
+
+            # 内部内容布局
+            inner_frame = ctk.CTkFrame(card, fg_color="transparent")
+            inner_frame.pack(fill="x", padx=12, pady=10)
+
+            # 左侧：RadioButton + 图标 + 标题
+            left_frame = ctk.CTkFrame(inner_frame, fg_color="transparent")
+            left_frame.pack(side="left", fill="y")
+
             radio = ctk.CTkRadioButton(
-                format_frame,
-                text=text,
+                left_frame,
+                text="",
                 variable=self.export_format,
-                value=value,
-                font=ctk.CTkFont(size=11)
+                value=fmt["value"],
+                command=lambda v=fmt["value"]: self._on_format_selected(v)
             )
-            radio.pack(anchor="w", padx=24, pady=3)
+            radio.pack(side="left", padx=(0, 10))
+
+            icon_label = ctk.CTkLabel(
+                left_frame,
+                text=fmt["icon"],
+                font=ctk.CTkFont(size=24)
+            )
+            icon_label.pack(side="left", padx=(0, 10))
+
+            # 标题 + 扩展名
+            title_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
+            title_frame.pack(side="left")
+
+            title_text = fmt["title"] + ("  ✨推荐" if fmt["recommended"] else "")
+            title_label = ctk.CTkLabel(
+                title_frame,
+                text=title_text,
+                font=ctk.CTkFont(*AppFonts.BODY, weight="bold")
+            )
+            title_label.pack(anchor="w")
+
+            ext_label = ctk.CTkLabel(
+                title_frame,
+                text=fmt["extension"],
+                font=ctk.CTkFont(*AppFonts.CAPTION),
+                text_color=AppColors.TEXT_MUTED
+            )
+            ext_label.pack(anchor="w")
+
+            # 右侧：描述文本
+            desc_label = ctk.CTkLabel(
+                inner_frame,
+                text=fmt["description"],
+                font=ctk.CTkFont(*AppFonts.CAPTION),
+                text_color=AppColors.TEXT_SECONDARY,
+                wraplength=380,
+                justify="left"
+            )
+            desc_label.pack(side="right", anchor="e", padx=(10, 0))
+
+        # 初始化选中状态样式
+        self._on_format_selected(self.export_format.get())
+
+    def _on_format_selected(self, format_value: str):
+        """格式选中时更新卡片视觉样式"""
+        for value, card in self.format_cards.items():
+            if value == format_value:
+                # 选中状态：使用主色调边框
+                card.configure(border_width=2, border_color=AppColors.PRIMARY)
+            else:
+                # 未选中状态：使用默认边框或无边框
+                card.configure(border_width=1, border_color=AppColors.BORDER)
 
     def _create_filename_section(self):
         """创建文件名设置区域"""
@@ -161,7 +251,7 @@ class ExportDialog:
 
         label = ctk.CTkLabel(
             filename_frame,
-            text="📝 文件名设置",
+            text="文件名设置",
             font=ctk.CTkFont(size=12, weight="bold")
         )
         label.pack(anchor="w", padx=12, pady=(8, 5))
@@ -225,7 +315,7 @@ class ExportDialog:
 
         label = ctk.CTkLabel(
             output_frame,
-            text="📂 输出目录",
+            text="输出目录",
             font=ctk.CTkFont(size=12, weight="bold")
         )
         label.pack(anchor="w", padx=12, pady=(8, 5))
@@ -244,12 +334,12 @@ class ExportDialog:
 
         self.browse_btn = ctk.CTkButton(
             dir_frame,
-            text="🌏 浏览...",
+            text="浏览...",
             command=self._on_browse,
             width=80,
             height=32,
-            fg_color="#225599",
-            hover_color="#114477"
+            fg_color=AppColors.PRIMARY,
+            hover_color=AppColors.PRIMARY_HOVER
         )
         self.browse_btn.pack(side="right")
         
@@ -258,27 +348,27 @@ class ExportDialog:
         button_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         button_frame.pack(fill="x", pady=(15, 5))
 
-        # 取消按钮（降低饱和度）
+        # 取消按钮
         self.cancel_btn = ctk.CTkButton(
             button_frame,
-            text="✖ 取消",
+            text="取消",
             command=self._on_cancel,
             width=90,
             height=36,
-            fg_color="#666666",
-            hover_color="#444444"
+            fg_color=AppColors.SECONDARY,
+            hover_color=AppColors.SECONDARY_HOVER
         )
         self.cancel_btn.pack(side="right", padx=3)
 
-        # 导出按钮（降低饱和度）
+        # 导出按钮
         self.export_btn = ctk.CTkButton(
             button_frame,
-            text="💾 导出",
+            text="导出",
             command=self._on_export,
             width=110,
             height=36,
-            fg_color="#224488",
-            hover_color="#113366"
+            fg_color=AppColors.SUCCESS,
+            hover_color=AppColors.SUCCESS_HOVER
         )
         self.export_btn.pack(side="right", padx=3)
         

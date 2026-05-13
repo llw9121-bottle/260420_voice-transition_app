@@ -17,13 +17,7 @@ from typing import List, Optional, Callable
 from loguru import logger
 
 from core.formatter.behavior_matcher import BehaviorDefinition, BehaviorConfig
-
-# 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
-if sys.platform.startswith('win'):
-    DEFAULT_FONT_FAMILY = "Microsoft YaHei"
-else:
-    # macOS/Linux 使用系统默认字体
-    DEFAULT_FONT_FAMILY = None
+from gui.theme import AppColors, AppFonts
 
 
 class BehaviorConfigDialog:
@@ -137,7 +131,7 @@ class BehaviorConfigDialog:
 
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
-        self.window.title("⚙ 配置关键行为")
+        self.window.title("配置关键行为")
         self.window.geometry("980x680")
         self.window.minsize(880, 600)
 
@@ -195,7 +189,7 @@ class BehaviorConfigDialog:
         self.title_label = ctk.CTkLabel(
             self.main_frame,
             text="关键行为配置",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=18, weight="bold")
         )
         self.title_label.pack(anchor="w", pady=(0, 5))
 
@@ -203,8 +197,8 @@ class BehaviorConfigDialog:
         self.desc_label = ctk.CTkLabel(
             self.main_frame,
             text=f"配置 {self.MIN_BEHAVIORS}-{self.MAX_BEHAVIORS} 个关键行为，用于识别转录文本中的特定行为模式。",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
-            text_color="gray"
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=11),
+            text_color=AppColors.TEXT_MUTED
         )
         self.desc_label.pack(anchor="w", pady=(0, 10))
 
@@ -216,7 +210,7 @@ class BehaviorConfigDialog:
         self.options_label = ctk.CTkLabel(
             self.options_frame,
             text="高级选项",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=12, weight="bold")
         )
         self.options_label.pack(anchor="w", padx=10, pady=(5, 5))
 
@@ -255,28 +249,28 @@ class BehaviorConfigDialog:
         
     def _create_table_header(self):
         """创建表格表头"""
-        header_frame = ctk.CTkFrame(self.list_frame, fg_color="gray25", height=32)
+        header_frame = ctk.CTkFrame(self.list_frame, fg_color=AppColors.SURFACE, height=32)
         header_frame.pack(fill="x", padx=8, pady=(8, 2))
         header_frame.pack_propagate(False)
 
         # 序号列
-        num_label = ctk.CTkLabel(header_frame, text="#", width=30, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
+        num_label = ctk.CTkLabel(header_frame, text="#", width=30, font=ctk.CTkFont(family=AppFonts.FAMILY, size=12, weight="bold"))
         num_label.pack(side="left", padx=6)
 
         # 名称列
-        name_label = ctk.CTkLabel(header_frame, text="行为名称", width=100, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
+        name_label = ctk.CTkLabel(header_frame, text="行为名称", width=100, font=ctk.CTkFont(family=AppFonts.FAMILY, size=12, weight="bold"))
         name_label.pack(side="left", padx=6)
 
         # 描述列
-        desc_label = ctk.CTkLabel(header_frame, text="行为描述", width=240, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
+        desc_label = ctk.CTkLabel(header_frame, text="行为描述", width=240, font=ctk.CTkFont(family=AppFonts.FAMILY, size=12, weight="bold"))
         desc_label.pack(side="left", padx=6, fill="x", expand=True)
 
         # 示例列
-        examples_label = ctk.CTkLabel(header_frame, text="示例", width=200, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
+        examples_label = ctk.CTkLabel(header_frame, text="示例", width=200, font=ctk.CTkFont(family=AppFonts.FAMILY, size=12, weight="bold"))
         examples_label.pack(side="left", padx=6)
 
         # 操作列
-        action_label = ctk.CTkLabel(header_frame, text="操作", width=60, font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold"))
+        action_label = ctk.CTkLabel(header_frame, text="操作", width=60, font=ctk.CTkFont(family=AppFonts.FAMILY, size=12, weight="bold"))
         action_label.pack(side="left", padx=6)
         
     def _refresh_behavior_rows(self):
@@ -339,8 +333,8 @@ class BehaviorConfigDialog:
                 text="×",
                 width=25,
                 height=25,
-                fg_color="red",
-                hover_color="darkred",
+                fg_color=AppColors.DANGER,
+                hover_color=AppColors.DANGER_HOVER,
                 command=lambda idx=index-1: self._delete_behavior(idx)
             )
             delete_btn.pack(side="left", padx=2)
@@ -357,37 +351,37 @@ class BehaviorConfigDialog:
         btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         btn_frame.pack(fill="x", pady=(10, 5))
 
-        # 最左侧：模板、导入、导出按钮（降低饱和度）
+        # 最左侧：模板、导入、导出按钮
         self.template_btn = ctk.CTkButton(
             btn_frame,
-            text="📋 模板",
+            text="模板",
             command=self._open_template_dialog,
             width=75,
             height=34,
-            fg_color="#116666",
-            hover_color="#004444"
+            fg_color=AppColors.ACCENT,
+            hover_color=AppColors.ACCENT_HOVER
         )
         self.template_btn.pack(side="left", padx=2)
 
         self.import_btn = ctk.CTkButton(
             btn_frame,
-            text="📥 导入",
+            text="导入",
             command=self._on_import,
             width=75,
             height=34,
-            fg_color="#333366",
-            hover_color="#222255"
+            fg_color=AppColors.SECONDARY,
+            hover_color=AppColors.SECONDARY_HOVER
         )
         self.import_btn.pack(side="left", padx=2)
 
         self.export_btn = ctk.CTkButton(
             btn_frame,
-            text="📤 导出",
+            text="导出",
             command=self._on_export,
             width=75,
             height=34,
-            fg_color="#333366",
-            hover_color="#222255"
+            fg_color=AppColors.SECONDARY,
+            hover_color=AppColors.SECONDARY_HOVER
         )
         self.export_btn.pack(side="left", padx=(2, 15))
 
@@ -397,7 +391,9 @@ class BehaviorConfigDialog:
             text="+ 添加行为",
             command=self._add_behavior,
             width=100,
-            height=34
+            height=34,
+            fg_color=AppColors.PRIMARY,
+            hover_color=AppColors.PRIMARY_HOVER
         )
         self.add_btn.pack(side="left", padx=2)
 
@@ -405,30 +401,30 @@ class BehaviorConfigDialog:
         self.count_label = ctk.CTkLabel(
             btn_frame,
             text=f"当前: {len(self.behaviors)} 个 (最少 {self.MIN_BEHAVIORS}, 最多 {self.MAX_BEHAVIORS})",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=11)
         )
         self.count_label.pack(side="left", padx=15)
 
-        # 右侧：取消和保存按钮（降低饱和度）
+        # 右侧：取消和保存按钮
         self.cancel_btn = ctk.CTkButton(
             btn_frame,
-            text="✖ 取消",
+            text="取消",
             command=self._on_cancel,
             width=80,
             height=34,
-            fg_color="#666666",
-            hover_color="#444444"
+            fg_color=AppColors.SECONDARY,
+            hover_color=AppColors.SECONDARY_HOVER
         )
         self.cancel_btn.pack(side="right", padx=2)
 
         self.save_btn = ctk.CTkButton(
             btn_frame,
-            text="💾 保存配置",
+            text="保存配置",
             command=self._on_save,
             width=100,
             height=34,
-            fg_color="#224488",
-            hover_color="#113366"
+            fg_color=AppColors.SUCCESS,
+            hover_color=AppColors.SUCCESS_HOVER
         )
         self.save_btn.pack(side="right", padx=2)
         
@@ -605,15 +601,15 @@ class BehaviorConfigDialog:
         title_label = ctk.CTkLabel(
             dialog,
             text="选择预置模板",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=16, weight="bold")
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=16, weight="bold")
         )
         title_label.pack(padx=20, pady=(15, 5))
 
         desc_label = ctk.CTkLabel(
             dialog,
             text="选择一个预置模板快速开始，可编辑修改后保存",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
-            text_color="gray"
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=11),
+            text_color=AppColors.TEXT_MUTED
         )
         desc_label.pack(padx=20, pady=(0, 10))
 

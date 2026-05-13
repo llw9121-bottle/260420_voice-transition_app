@@ -8,6 +8,8 @@
 import customtkinter as ctk
 from typing import Optional
 
+from gui.theme import AppColors
+
 
 class TranscriptionView:
     """
@@ -46,7 +48,7 @@ class TranscriptionView:
             self.header,
             text="字数: 0",
             font=ctk.CTkFont(size=11),
-            text_color="gray"
+            text_color=AppColors.TEXT_MUTED
         )
         self.word_count_label.pack(side="right", padx=10)
         

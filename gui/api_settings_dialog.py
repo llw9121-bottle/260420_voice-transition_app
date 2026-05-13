@@ -13,13 +13,7 @@ from typing import Optional, Callable
 from loguru import logger
 
 from config.settings import save_api_configuration
-
-# 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
-if sys.platform.startswith('win'):
-    DEFAULT_FONT_FAMILY = "Microsoft YaHei"
-else:
-    # macOS/Linux 使用系统默认字体
-    DEFAULT_FONT_FAMILY = None
+from gui.theme import AppColors, AppFonts
 
 
 class APISettingsDialog:
@@ -54,7 +48,7 @@ class APISettingsDialog:
 
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
-        self.window.title("🔑 配置 API Key")
+        self.window.title("配置 API Key")
         self.window.geometry("680x540")
         self.window.minsize(620, 480)
 
@@ -104,7 +98,7 @@ class APISettingsDialog:
         self.title_label = ctk.CTkLabel(
             self.main_frame,
             text=title_text,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=18, weight="bold")
         )
         self.title_label.pack(anchor="w", pady=(0, 10))
 
@@ -114,14 +108,14 @@ class APISettingsDialog:
         self.desc_label = ctk.CTkLabel(
             self.main_frame,
             text=intro_text,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12),
-            text_color="gray",
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=12),
+            text_color=AppColors.TEXT_SECONDARY,
             justify="left"
         )
         self.desc_label.pack(anchor="w", pady=(0, 10))
 
         # 获取帮助链接提示
-        help_text = """📖 获取 API Key 步骤:
+        help_text = """获取 API Key 步骤:
 1. 访问阿里云 DashScope 控制台: https://dashscope.aliyun.com/
 2. 登录或注册阿里云账号
 3. 开通 DashScope 服务
@@ -129,8 +123,8 @@ class APISettingsDialog:
         self.help_label = ctk.CTkLabel(
             self.main_frame,
             text=help_text,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
-            text_color="gray",
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=11),
+            text_color=AppColors.TEXT_SECONDARY,
             justify="left"
         )
         self.help_label.pack(anchor="w", pady=(0, 15))
@@ -139,22 +133,22 @@ class APISettingsDialog:
         self._create_dashscope_input(initial_dashscope)
 
         # 分隔线
-        separator = ctk.CTkFrame(self.main_frame, height=2, fg_color="gray30")
+        separator = ctk.CTkFrame(self.main_frame, height=2, fg_color=AppColors.DIVIDER)
         separator.pack(fill="x", pady=10)
 
         # Bailian API Key (可选)
         self._create_bailian_input(initial_bailian)
 
         # 提示信息
-        hint_text = """💡 提示:
+        hint_text = """提示:
 • 如果 BAILIAN_API_KEY 留空，默认使用 DASHSCOPE_API_KEY
 • API Key 保存在项目根目录的 .env 文件中
 • 保存后需要重启应用才能生效"""
         self.hint_label = ctk.CTkLabel(
             self.main_frame,
             text=hint_text,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10),
-            text_color="gray",
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=10),
+            text_color=AppColors.TEXT_SECONDARY,
             justify="left"
         )
         self.hint_label.pack(anchor="w", pady=(8, 10))
@@ -163,27 +157,55 @@ class APISettingsDialog:
         self._create_button_bar()
 
     def _create_dashscope_input(self, initial_value: str):
-        """创建 DashScope API Key 输入框"""
+        """创建 DashScope API Key 输入框（带粘贴按钮和实时校验）"""
         # 标签框架
         frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         frame.pack(fill="x", pady=5)
 
+        # 标题和状态标签在同一行
+        header_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        header_frame.pack(fill="x", padx=5, pady=(2, 5))
+
         label = ctk.CTkLabel(
-            frame,
+            header_frame,
             text="DashScope API Key *",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=13, weight="bold")
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
-        label.pack(anchor="w", padx=5, pady=(2, 5))
+        label.pack(side="left")
+
+        # 校验状态标签
+        self.dashscope_status_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            font=ctk.CTkFont(size=16)
+        )
+        self.dashscope_status_label.pack(side="left", padx=8)
+
+        # 输入框行：输入框 + 按钮
+        input_row = ctk.CTkFrame(frame, fg_color="transparent")
+        input_row.pack(fill="x", padx=5, pady=(0, 5))
 
         self.dashscope_entry = ctk.CTkEntry(
-            frame,
-            placeholder_text="请输入你的 DashScope API Key，例如: sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            input_row,
+            placeholder_text="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             show="•",
             height=38
         )
         if initial_value:
             self.dashscope_entry.insert(0, initial_value)
-        self.dashscope_entry.pack(fill="x", padx=5, pady=(0, 5))
+        self.dashscope_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        # 粘贴按钮
+        paste_btn = ctk.CTkButton(
+            input_row,
+            text="📋 粘贴",
+            command=self._paste_dashscope_key,
+            width=70,
+            height=38,
+            fg_color=AppColors.PRIMARY,
+            hover_color=AppColors.PRIMARY_HOVER
+        )
+        paste_btn.pack(side="left")
 
         # 显示/隐藏复选框
         self.show_key_var = ctk.BooleanVar(value=False)
@@ -191,12 +213,18 @@ class APISettingsDialog:
             frame,
             text="显示 API Key",
             variable=self.show_key_var,
-            command=self._toggle_show_key
+            command=self._toggle_show_key,
+            font=ctk.CTkFont(*AppFonts.CAPTION)
         )
         self.show_check.pack(anchor="w", padx=5)
 
+        # 绑定输入事件用于实时校验
+        self.dashscope_entry.bind("<KeyRelease>", self._validate_dashscope_key)
+        # 初始化校验
+        self._validate_dashscope_key()
+
     def _create_bailian_input(self, initial_value: str):
-        """创建 Bailian API Key 输入框"""
+        """创建 Bailian API Key 输入框（带粘贴按钮）"""
         # 标签框架
         frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         frame.pack(fill="x", pady=5)
@@ -204,19 +232,71 @@ class APISettingsDialog:
         label = ctk.CTkLabel(
             frame,
             text="Bailian API Key (可选)",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=13, weight="bold")
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
         label.pack(anchor="w", padx=5, pady=(2, 5))
 
+        # 输入框行：输入框 + 按钮
+        input_row = ctk.CTkFrame(frame, fg_color="transparent")
+        input_row.pack(fill="x", padx=5, pady=(0, 5))
+
         self.bailian_entry = ctk.CTkEntry(
-            frame,
-            placeholder_text="留空则使用 DashScope API Key，不需要额外填写",
+            input_row,
+            placeholder_text="留空则使用 DashScope API Key",
             show="•",
             height=38
         )
         if initial_value:
             self.bailian_entry.insert(0, initial_value)
-        self.bailian_entry.pack(fill="x", padx=5, pady=(0, 5))
+        self.bailian_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        # 粘贴按钮
+        paste_btn = ctk.CTkButton(
+            input_row,
+            text="📋 粘贴",
+            command=self._paste_bailian_key,
+            width=70,
+            height=38,
+            fg_color=AppColors.SECONDARY,
+            hover_color=AppColors.SECONDARY_HOVER
+        )
+        paste_btn.pack(side="left")
+
+    def _paste_dashscope_key(self):
+        """从剪贴板粘贴 DashScope API Key"""
+        try:
+            text = self.window.clipboard_get()
+            self.dashscope_entry.delete(0, "end")
+            self.dashscope_entry.insert(0, text.strip())
+            self._validate_dashscope_key()
+        except Exception as e:
+            logger.warning(f"剪贴板粘贴失败: {e}")
+
+    def _paste_bailian_key(self):
+        """从剪贴板粘贴 Bailian API Key"""
+        try:
+            text = self.window.clipboard_get()
+            self.bailian_entry.delete(0, "end")
+            self.bailian_entry.insert(0, text.strip())
+        except Exception as e:
+            logger.warning(f"剪贴板粘贴失败: {e}")
+
+    def _validate_dashscope_key(self, event=None):
+        """实时校验 DashScope API Key 格式"""
+        key = self.dashscope_entry.get().strip()
+
+        if not key:
+            # 空输入 - 无状态
+            self.dashscope_status_label.configure(text="")
+            return
+
+        # 校验规则: 以 sk- 开头，长度合理
+        is_valid = key.startswith("sk-") and len(key) >= 20
+
+        if is_valid:
+            self.dashscope_status_label.configure(text="✅", text_color=AppColors.SUCCESS)
+        else:
+            self.dashscope_status_label.configure(text="❌", text_color=AppColors.DANGER)
 
 
     def _create_button_bar(self):
@@ -227,24 +307,24 @@ class APISettingsDialog:
         # 取消按钮
         self.cancel_btn = ctk.CTkButton(
             btn_frame,
-            text="✖ 取消",
+            text="取消",
             command=self._on_cancel,
             width=100,
             height=40,
-            fg_color="#666666",
-            hover_color="#444444"
+            fg_color=AppColors.SECONDARY,
+            hover_color=AppColors.SECONDARY_HOVER
         )
         self.cancel_btn.pack(side="right", padx=3)
 
         # 保存按钮
         self.save_btn = ctk.CTkButton(
             btn_frame,
-            text="💾 保存配置",
+            text="保存配置",
             command=self._on_save,
             width=130,
             height=40,
-            fg_color="#228844",
-            hover_color="#116633"
+            fg_color=AppColors.SUCCESS,
+            hover_color=AppColors.SUCCESS_HOVER
         )
         self.save_btn.pack(side="right", padx=3)
 

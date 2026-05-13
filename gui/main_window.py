@@ -13,14 +13,8 @@ from typing import Optional, Callable
 from config.settings import settings, project_root
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.behavior_matcher import BehaviorConfig
+from gui.theme import AppColors, AppFonts
 from utils.logger import logger
-
-# 默认字体：Windows 使用微软雅黑，其他平台使用系统默认
-if sys.platform.startswith('win'):
-    DEFAULT_FONT_FAMILY = "Microsoft YaHei"
-else:
-    # macOS/Linux 使用系统默认字体
-    DEFAULT_FONT_FAMILY = None
 
 
 class MainWindow:
@@ -115,16 +109,16 @@ class MainWindow:
         self.title_label = ctk.CTkLabel(
             title_frame,
             text="语音实时转录系统",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18, weight="bold")
+            font=ctk.CTkFont(*AppFonts.HEADING)
         )
         self.title_label.pack(side="top", anchor="w")
 
         # 帮助提示
         self.help_hint_label = ctk.CTkLabel(
             title_frame,
-            text="点击「❓ 帮助」查看使用说明 | 快捷键: 空格=开始/暂停, Esc=停止",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10),
-            text_color="gray"
+            text="点击「帮助」查看使用说明 | 快捷键: 空格=开始/暂停, Esc=停止",
+            font=ctk.CTkFont(*AppFonts.CAPTION),
+            text_color=AppColors.TEXT_MUTED
         )
         self.help_hint_label.pack(side="top", anchor="w")
 
@@ -132,19 +126,19 @@ class MainWindow:
         self.button_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
         self.button_frame.pack(side="right", padx=10, pady=10)
         
-        # 开始按钮 - 绿色表示可开始（降低饱和度）
+        # 开始按钮
         self.start_btn = ctk.CTkButton(
             self.button_frame,
             text="▶ 开始录音",
             command=self._on_start_click,
             width=110,
             height=36,
-            fg_color="#2D8855",
-            hover_color="#1D6644"
+            fg_color=AppColors.SUCCESS,
+            hover_color=AppColors.SUCCESS_HOVER
         )
         self.start_btn.pack(side="left", padx=4)
 
-        # 暂停/继续按钮 - 橙色表示暂停（降低饱和度）
+        # 暂停/继续按钮
         self.pause_btn = ctk.CTkButton(
             self.button_frame,
             text="⏸ 暂停",
@@ -152,12 +146,12 @@ class MainWindow:
             width=90,
             height=36,
             state="disabled",
-            fg_color="#AA7722",
-            hover_color="#885511"
+            fg_color=AppColors.WARNING,
+            hover_color=AppColors.WARNING_HOVER
         )
         self.pause_btn.pack(side="left", padx=4)
 
-        # 停止按钮 - 红色表示停止（降低饱和度）
+        # 停止按钮
         self.stop_btn = ctk.CTkButton(
             self.button_frame,
             text="⏹ 停止",
@@ -165,32 +159,35 @@ class MainWindow:
             width=90,
             height=36,
             state="disabled",
-            fg_color="#AA3333",
-            hover_color="#882222"
+            fg_color=AppColors.DANGER,
+            hover_color=AppColors.DANGER_HOVER
         )
         self.stop_btn.pack(side="left", padx=4)
 
-        # 导出按钮 - 蓝色表示操作（降低饱和度）
+        # 导出按钮
         self.export_btn = ctk.CTkButton(
             self.button_frame,
-            text="💾 导出",
+            text="导出",
             command=self._on_export_click,
             width=80,
             height=36,
-            fg_color="#335599",
-            hover_color="#224477"
+            fg_color=AppColors.PRIMARY,
+            hover_color=AppColors.PRIMARY_HOVER
         )
         self.export_btn.pack(side="left", padx=4)
 
-        # 帮助按钮 - 灰色
+        # 帮助按钮（outlined 样式）
         self.help_btn = ctk.CTkButton(
             self.button_frame,
-            text="❓ 帮助",
+            text="帮助",
             command=self._show_help,
             width=70,
             height=36,
-            fg_color="#555555",
-            hover_color="#444444"
+            fg_color="transparent",
+            hover_color=AppColors.SECONDARY_HOVER,
+            border_width=2,
+            border_color=AppColors.SECONDARY,
+            text_color=AppColors.SECONDARY
         )
         self.help_btn.pack(side="left", padx=4)
         
@@ -209,7 +206,7 @@ class MainWindow:
         self.settings_scroll_frame = ctk.CTkScrollableFrame(
             self.content_frame,
             label_text="设置选项",
-            label_font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+            label_font=ctk.CTkFont(*AppFonts.TITLE)
         )
         self.settings_scroll_frame.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="nsew")
 
@@ -217,17 +214,26 @@ class MainWindow:
         self._create_settings_panel()
         
     def _create_transcription_area(self):
-        """创建转录文本区"""
-        self.transcription_frame = ctk.CTkFrame(self.content_frame)
-        self.transcription_frame.grid(row=0, column=0, padx=(10, 5), pady=10, sticky="nsew")
+        """创建转录文本区（优化视觉区分）"""
+        # 外层容器（添加边框效果）
+        self.transcription_outer = ctk.CTkFrame(
+            self.content_frame,
+            fg_color="transparent",
+            border_width=2,
+            border_color=AppColors.BORDER
+        )
+        self.transcription_outer.grid(row=0, column=0, padx=(10, 5), pady=10, sticky="nsew")
+
+        self.transcription_frame = ctk.CTkFrame(self.transcription_outer, fg_color="transparent")
+        self.transcription_frame.pack(fill="both", expand=True, padx=8, pady=8)
         self.transcription_frame.grid_columnconfigure(1, weight=1)
         self.transcription_frame.grid_rowconfigure(1, weight=1)
 
         # 左侧标签
         self.transcription_label = ctk.CTkLabel(
             self.transcription_frame,
-            text="📝 实时转录",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=14, weight="bold")
+            text="实时转录",
+            font=ctk.CTkFont(*AppFonts.TITLE)
         )
         self.transcription_label.grid(row=0, column=0, padx=(12, 0), pady=(12, 6), sticky="w")
 
@@ -238,42 +244,48 @@ class MainWindow:
         # 搜索输入框
         self.search_entry = ctk.CTkEntry(
             self.search_frame,
-            placeholder_text="🔍 搜索...",
+            placeholder_text="搜索...",
             width=140,
             height=30
         )
         self.search_entry.pack(side="left", padx=(0, 4))
 
-        # 上一个匹配按钮
+        # 上一个匹配按钮（outlined 样式）
         self.prev_btn = ctk.CTkButton(
             self.search_frame,
             text="▲",
             command=self._search_prev,
             width=28,
             height=30,
-            fg_color="#555555",
-            hover_color="#333333"
+            fg_color="transparent",
+            hover_color=AppColors.SECONDARY_HOVER,
+            border_width=1,
+            border_color=AppColors.SECONDARY,
+            text_color=AppColors.SECONDARY
         )
         self.prev_btn.pack(side="left", padx=(0, 2))
 
-        # 下一个匹配按钮
+        # 下一个匹配按钮（outlined 样式）
         self.next_btn = ctk.CTkButton(
             self.search_frame,
             text="▼",
             command=self._search_next,
             width=28,
             height=30,
-            fg_color="#555555",
-            hover_color="#333333"
+            fg_color="transparent",
+            hover_color=AppColors.SECONDARY_HOVER,
+            border_width=1,
+            border_color=AppColors.SECONDARY,
+            text_color=AppColors.SECONDARY
         )
         self.next_btn.pack(side="left", padx=(0, 4))
 
         # 字体大小标签
         self.font_size_label = ctk.CTkLabel(
             self.search_frame,
-            text="🔤 字体:",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
-            text_color="gray"
+            text="字体:",
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL),
+            text_color=AppColors.TEXT_MUTED
         )
         self.font_size_label.pack(side="left", padx=(8, 2))
 
@@ -285,7 +297,7 @@ class MainWindow:
             command=self._on_font_size_change,
             width=50,
             height=30,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10)
+            font=ctk.CTkFont(*AppFonts.CAPTION)
         )
         self.font_size_menu.pack(side="left", padx=(0, 0))
 
@@ -293,25 +305,29 @@ class MainWindow:
         self.options_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
         self.options_frame.grid(row=0, column=2, padx=(5, 12), pady=(10, 5), sticky="e")
 
-        # 滚动锁定复选框 (Task 10)
+        # 滚动锁定复选框
         self.scroll_lock_var = ctk.BooleanVar(value=False)
         self.scroll_lock_check = ctk.CTkCheckBox(
             self.options_frame,
-            text="🔒 滚动锁定",
+            text="滚动锁定",
             variable=self.scroll_lock_var,
             onvalue=True,
             offvalue=False,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL)
         )
         self.scroll_lock_check.pack(side="right")
 
-        # 文本框（占据整行）
+        # 文本框（占据整行，优化视觉样式）
         self.transcription_text = ctk.CTkTextbox(
             self.transcription_frame,
             wrap="word",
-            font=ctk.CTkFont(size=self.font_size.get())
+            font=ctk.CTkFont(AppFonts.FAMILY, self.font_size.get()),
+            fg_color=AppColors.SURFACE,
+            border_width=1,
+            border_color=AppColors.BORDER,
+            corner_radius=6
         )
-        self.transcription_text.grid(row=1, column=0, columnspan=3, padx=10, pady=(5, 10), sticky="nsew")
+        self.transcription_text.grid(row=1, column=0, columnspan=3, padx=4, pady=(5, 4), sticky="nsew")
         self.transcription_text.insert("0.0", "等待开始录音...")
         self.transcription_text.configure(state="disabled")
 
@@ -320,9 +336,24 @@ class MainWindow:
         self._current_match_index: int = -1
         self._search_last_term: str = ""
 
+        # 配置行间距（改善可读性）
+        self.transcription_text.tag_config(
+            'line_spacing',
+            spacing2=AppFonts.LINE_SPACING,
+            spacing3=AppFonts.PARAGRAPH_SPACING
+        )
+
         # 配置搜索高亮标签
-        self.transcription_text.tag_config("search_highlight", background="#ffff00", foreground="#000000")
-        self.transcription_text.tag_config("search_current", background="#ff8800", foreground="#000000")
+        self.transcription_text.tag_config(
+            "search_highlight",
+            background=AppColors.SEARCH_HIGHLIGHT_BG,
+            foreground=AppColors.SEARCH_HIGHLIGHT_FG
+        )
+        self.transcription_text.tag_config(
+            "search_current",
+            background=AppColors.SEARCH_CURRENT_BG,
+            foreground=AppColors.SEARCH_CURRENT_FG
+        )
 
         # 绑定搜索事件
         self.search_entry.bind("<Return>", self._on_search_enter)
@@ -334,98 +365,108 @@ class MainWindow:
         self.settings_frame = ctk.CTkFrame(self.settings_scroll_frame, fg_color="transparent")
         self.settings_frame.pack(fill="both", expand=True)
 
-        # 1. 格式化风格选择（最常用，放上方）
+        # ===== 卡片 1: 格式化风格（最常用，放上方）
+        style_card = ctk.CTkFrame(self.settings_frame)
+        style_card.pack(fill="x", padx=8, pady=5)
+        style_inner = ctk.CTkFrame(style_card, fg_color="transparent")
+        style_inner.pack(fill="x", padx=10, pady=10)
+
         self.style_label = ctk.CTkLabel(
-            self.settings_frame,
+            style_inner,
             text="格式化风格",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
-        self.style_label.pack(anchor="w", padx=10, pady=(10, 5))
+        self.style_label.pack(anchor="w", pady=(0, 6))
 
         self.style_var = ctk.StringVar(value="cleaned")
         self.style_menu = ctk.CTkOptionMenu(
-            self.settings_frame,
+            style_inner,
             values=["raw", "cleaned", "paragraphs", "behavior_match"],
             variable=self.style_var,
-            command=self._on_style_change
+            command=self._on_style_change,
+            height=32
         )
-        self.style_menu.pack(fill="x", padx=10, pady=5)
+        self.style_menu.pack(fill="x", pady=(0, 6))
 
         # 段落选项：LLM语义分段（仅paragraphs模式可用
         self.llm_para_var = ctk.BooleanVar(value=False)
         self.llm_para_check = ctk.CTkCheckBox(
-            self.settings_frame,
+            style_inner,
             text="启用 LLM 语义分段（仅段落模式，消耗Token）",
             variable=self.llm_para_var,
             onvalue=True,
             offvalue=False
         )
-        self.llm_para_check.pack(anchor="w", padx=10, pady=(0, 5))
+        self.llm_para_check.pack(anchor="w")
 
-        # 分隔线
-        self.separator1 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
-        self.separator1.pack(fill="x", padx=10, pady=10)
+        # ===== 卡片 2: 功能按钮区
+        buttons_card = ctk.CTkFrame(self.settings_frame)
+        buttons_card.pack(fill="x", padx=8, pady=5)
+        buttons_inner = ctk.CTkFrame(buttons_card, fg_color="transparent")
+        buttons_inner.pack(fill="x", padx=10, pady=10)
 
-        # 2. 行为匹配配置按钮
+        # 行为匹配配置按钮
         self.behavior_btn = ctk.CTkButton(
-            self.settings_frame,
-            text="⚙ 配置关键行为",
+            buttons_inner,
+            text="配置关键行为",
             command=self._on_behavior_config_click,
-            height=36
+            height=34
         )
-        self.behavior_btn.pack(fill="x", padx=10, pady=(0, 6))
+        self.behavior_btn.pack(fill="x", pady=(0, 6))
 
-        # 3. 导出设置按钮
+        # 导出设置按钮
         self.export_settings_btn = ctk.CTkButton(
-            self.settings_frame,
-            text="📝 导出设置",
+            buttons_inner,
+            text="导出设置",
             command=self._on_export_settings_click,
-            height=36
+            height=34
         )
-        self.export_settings_btn.pack(fill="x", padx=10, pady=(0, 6))
+        self.export_settings_btn.pack(fill="x")
 
-        # 分隔线
-        self.separator2 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
-        self.separator2.pack(fill="x", padx=10, pady=10)
+        # ===== 卡片 3: 音频选项
+        audio_card = ctk.CTkFrame(self.settings_frame)
+        audio_card.pack(fill="x", padx=8, pady=5)
+        audio_inner = ctk.CTkFrame(audio_card, fg_color="transparent")
+        audio_inner.pack(fill="x", padx=10, pady=10)
 
-        # 4. 音频选项
         self.save_audio_label = ctk.CTkLabel(
-            self.settings_frame,
+            audio_inner,
             text="音频选项",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
-        self.save_audio_label.pack(anchor="w", padx=10, pady=(0, 5))
+        self.save_audio_label.pack(anchor="w", pady=(0, 8))
 
         self.save_audio_var = ctk.BooleanVar(value=True)
         self.save_audio_switch = ctk.CTkSwitch(
-            self.settings_frame,
+            audio_inner,
             text="保存原始音频(WAV)",
             variable=self.save_audio_var,
             onvalue=True,
             offvalue=False,
             command=self._on_save_audio_change
         )
-        self.save_audio_switch.pack(anchor="w", padx=10, pady=(0, 10))
+        self.save_audio_switch.pack(anchor="w")
 
-        # 分隔线
-        self.separator3 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
-        self.separator3.pack(fill="x", padx=10, pady=10)
+        # ===== 卡片 4: ASR 识别设置
+        asr_card = ctk.CTkFrame(self.settings_frame)
+        asr_card.pack(fill="x", padx=8, pady=5)
+        asr_inner = ctk.CTkFrame(asr_card, fg_color="transparent")
+        asr_inner.pack(fill="x", padx=10, pady=10)
 
-        # 5. ASR 识别设置
         self.asr_label = ctk.CTkLabel(
-            self.settings_frame,
+            asr_inner,
             text="识别设置",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
-        self.asr_label.pack(anchor="w", padx=10, pady=(0, 5))
+        self.asr_label.pack(anchor="w", pady=(0, 8))
 
         # 语言选择
         self.language_label = ctk.CTkLabel(
-            self.settings_frame,
+            asr_inner,
             text="识别语言:",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL)
         )
-        self.language_label.pack(anchor="w", padx=15, pady=(0, 3))
+        self.language_label.pack(anchor="w", padx=5, pady=(0, 4))
 
         # 常用语言列表，按使用频率排序
         language_options = [
@@ -448,57 +489,58 @@ class MainWindow:
                 break
         self.language_var = ctk.StringVar(value=default_language_display)
         self.language_menu = ctk.CTkOptionMenu(
-            self.settings_frame,
+            asr_inner,
             values=language_options,
             variable=self.language_var,
             command=self._on_language_change,
-            height=30,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+            height=32,
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL)
         )
-        self.language_menu.pack(fill="x", padx=15, pady=(0, 8))
+        self.language_menu.pack(fill="x", padx=5, pady=(0, 10))
 
         # VAD 静音检测时长
         self.vad_label = ctk.CTkLabel(
-            self.settings_frame,
+            asr_inner,
             text=f"断句灵敏度: {self.saved_vad_ms} ms",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11)
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=11)
         )
-        self.vad_label.pack(anchor="w", padx=15, pady=(0, 3))
+        self.vad_label.pack(anchor="w", padx=5, pady=(0, 4))
 
         self.vad_silence_var = ctk.IntVar(value=self.saved_vad_ms)
         self.vad_slider = ctk.CTkSlider(
-            self.settings_frame,
+            asr_inner,
             from_=200,
             to=2000,
             number_of_steps=18,  # 200-2000 每步100
             variable=self.vad_silence_var,
             command=self._on_vad_change
         )
-        self.vad_slider.pack(fill="x", padx=15, pady=(0, 3))
+        self.vad_slider.pack(fill="x", padx=5, pady=(0, 4))
 
         self.vad_hint_label = ctk.CTkLabel(
-            self.settings_frame,
+            asr_inner,
             text="短=灵敏快断  长=稳定少断",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=9),
-            text_color="gray"
+            font=ctk.CTkFont(AppFonts.FAMILY, 9),
+            text_color=AppColors.TEXT_MUTED
         )
-        self.vad_hint_label.pack(anchor="e", padx=15, pady=(0, 10))
+        self.vad_hint_label.pack(anchor="e", padx=5)
 
-        # 分隔线
-        self.separator4 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
-        self.separator4.pack(fill="x", padx=10, pady=10)
+        # ===== 卡片 5: 音频输入设备选择
+        device_card = ctk.CTkFrame(self.settings_frame)
+        device_card.pack(fill="x", padx=8, pady=5)
+        device_inner = ctk.CTkFrame(device_card, fg_color="transparent")
+        device_inner.pack(fill="x", padx=10, pady=10)
 
-        # 6. 音频输入设备选择（不常用，放最底部）
         self.device_label = ctk.CTkLabel(
-            self.settings_frame,
+            device_inner,
             text="音频输入设备",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12, weight="bold")
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
-        self.device_label.pack(anchor="w", padx=10, pady=(0, 5))
+        self.device_label.pack(anchor="w", pady=(0, 8))
 
         # 设备选择框架 - 下拉框和刷新按钮并排显示
-        self.device_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.device_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.device_frame = ctk.CTkFrame(device_inner, fg_color="transparent")
+        self.device_frame.pack(fill="x")
         self.device_frame.grid_columnconfigure(0, weight=1)
         self.device_frame.grid_columnconfigure(1, weight=0)
 
@@ -508,7 +550,7 @@ class MainWindow:
             values=["加载中..."],
             variable=self.device_var,
             command=self._on_device_change,
-            height=30
+            height=32
         )
         self.device_menu.grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
@@ -517,7 +559,7 @@ class MainWindow:
             self.device_frame,
             text="刷新",
             command=self._refresh_devices,
-            height=30,
+            height=32,
             width=60
         )
         self.refresh_device_btn.grid(row=0, column=1, sticky="e")
@@ -526,100 +568,107 @@ class MainWindow:
         self.available_devices: list[tuple[int, str]] = []  # (index, name)
         self.selected_device_index: Optional[int] = None
 
-        # 分隔线
-        self.separator5 = ctk.CTkFrame(self.settings_frame, height=2, fg_color="gray30")
-        self.separator5.pack(fill="x", padx=10, pady=(15, 10))
+        # ===== 卡片 6: API 设置
+        api_card = ctk.CTkFrame(self.settings_frame)
+        api_card.pack(fill="x", padx=8, pady=5)
+        api_inner = ctk.CTkFrame(api_card, fg_color="transparent")
+        api_inner.pack(fill="x", padx=10, pady=10)
 
         # API 设置按钮
         self.api_settings_btn = ctk.CTkButton(
-            self.settings_frame,
-            text="🔑 设置 API Key",
+            api_inner,
+            text="设置 API Key",
             command=self._open_api_settings,
             height=34,
-            fg_color="#553388",
-            hover_color="#442277"
+            fg_color=AppColors.ACCENT,
+            hover_color=AppColors.ACCENT_HOVER
         )
-        self.api_settings_btn.pack(fill="x", padx=10, pady=(0, 10))
+        self.api_settings_btn.pack(fill="x")
         
     def _create_status_bar(self):
-        """创建底部状态栏"""
-        self.status_frame = ctk.CTkFrame(self.main_frame, height=34)
+        """创建底部状态栏（优化高度和布局）"""
+        self.status_frame = ctk.CTkFrame(self.main_frame, height=44)
         self.status_frame.grid(row=2, column=0, padx=12, pady=(6, 10), sticky="ew")
         self.status_frame.grid_propagate(False)
 
-        # 录音状态指示灯（最左侧）
+        # 左侧：状态指示区域
+        left_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
+        left_frame.pack(side="left", fill="y", padx=(12, 0))
+
+        # 录音状态指示灯（脉冲动画效果）
         self.recording_indicator = ctk.CTkLabel(
-            self.status_frame,
+            left_frame,
             text="●",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=18),
-            text_color="gray50"
+            font=ctk.CTkFont(AppFonts.FAMILY, 20),
+            text_color=AppColors.RECORDING_INDICATOR_OFF
         )
-        self.recording_indicator.pack(side="left", padx=(12, 0))
+        self.recording_indicator.pack(side="left", pady=8)
 
         # 状态标签
         self.status_label = ctk.CTkLabel(
-            self.status_frame,
+            left_frame,
             text="就绪",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12)
+            font=ctk.CTkFont(*AppFonts.BODY)
         )
-        self.status_label.pack(side="left", padx=10, pady=8)
+        self.status_label.pack(side="left", padx=(10, 0), pady=8)
 
-        # 音量指示器框架（最右侧）
-        self.volume_frame = ctk.CTkFrame(
-            self.status_frame,
-            width=80,
-            height=18,
-            fg_color="gray20"
-        )
-        self.volume_frame.pack(side="right", padx=(2, 12))
-        self.volume_frame.grid_propagate(False)
+        # 右侧：控制和信息区域
+        right_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
+        right_frame.pack(side="right", fill="y", padx=(0, 12))
 
-        # 音量进度条
-        self.volume_bar = ctk.CTkProgressBar(
-            self.volume_frame,
-            width=76,
-            height=14,
-            corner_radius=2
-        )
-        self.volume_bar.set(0)
-        self.volume_bar.place(relx=0.5, rely=0.5, anchor="center")
+        # 音量指示器区域
+        volume_container = ctk.CTkFrame(right_frame, fg_color="transparent")
+        volume_container.pack(side="right", padx=(8, 0))
 
         # 音量标签
         self.volume_label = ctk.CTkLabel(
-            self.status_frame,
+            volume_container,
             text="音量:",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
-            text_color="gray"
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL),
+            text_color=AppColors.TEXT_MUTED
         )
-        self.volume_label.pack(side="right", padx=(5, 2))
+        self.volume_label.pack(side="left", pady=8)
 
-        # 主题模式选择（音量左边）
+        # 音量进度条
+        self.volume_bar = ctk.CTkProgressBar(
+            volume_container,
+            width=80,
+            height=14,
+            corner_radius=3
+        )
+        self.volume_bar.set(0)
+        self.volume_bar.pack(side="left", padx=(4, 0), pady=8)
+
+        # 主题选择区域
+        theme_container = ctk.CTkFrame(right_frame, fg_color="transparent")
+        theme_container.pack(side="right", padx=(8, 0))
+
+        self.theme_label = ctk.CTkLabel(
+            theme_container,
+            text="主题:",
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL),
+            text_color=AppColors.TEXT_MUTED
+        )
+        self.theme_label.pack(side="left", pady=8)
+
         self.theme_menu = ctk.CTkOptionMenu(
-            self.status_frame,
+            theme_container,
             values=["System", "Light", "Dark"],
             variable=self.appearance_mode,
             command=self._on_theme_change,
-            width=80,
-            height=22,
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=10)
+            width=82,
+            height=26,
+            font=ctk.CTkFont(*AppFonts.CAPTION)
         )
-        self.theme_menu.pack(side="right", padx=(2, 5))
+        self.theme_menu.pack(side="left", padx=(4, 0), pady=8)
 
-        self.theme_label = ctk.CTkLabel(
-            self.status_frame,
-            text="🎨 主题:",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=11),
-            text_color="gray"
-        )
-        self.theme_label.pack(side="right", padx=(8, 2))
-
-        # 时长标签
+        # 时长标签（等宽字体确保数字对齐不跳动）
         self.duration_label = ctk.CTkLabel(
-            self.status_frame,
-            text=" ⏱  00:00",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=12)
+            right_frame,
+            text="00:00",
+            font=ctk.CTkFont(AppFonts.MONOSPACE, 14, weight='bold')
         )
-        self.duration_label.pack(side="right", padx=(0, 8))
+        self.duration_label.pack(side="right", padx=(0, 8), pady=8)
 
         # 闪烁动画控制
         self._is_recording_flashing = False
@@ -1031,7 +1080,7 @@ class MainWindow:
             self._flash_recording_indicator()
         else:
             self._is_recording_flashing = False
-            self.recording_indicator.configure(text_color="gray50")
+            self.recording_indicator.configure(text_color=AppColors.RECORDING_INDICATOR_OFF)
 
     def _flash_recording_indicator(self):
         """闪烁录音指示灯（脉冲效果）"""
@@ -1200,8 +1249,8 @@ class MainWindow:
             size_str: 选择的字体大小字符串
         """
         size = int(size_str)
-        # 更新文本框字体
-        self.transcription_text.configure(font=ctk.CTkFont(size=size))
+        # 更新文本框字体（保持平台自适应字体族一致）
+        self.transcription_text.configure(font=ctk.CTkFont(AppFonts.FAMILY, size))
         # 保存配置
         self._save_user_config()
         logger.info(f"文本字体已调整: {size}pt")
@@ -1276,7 +1325,7 @@ VAD(语音活动检测)静音时长控制断句灵敏度：
         help_textbox = ctk.CTkTextbox(
             text_frame,
             wrap="word",
-            font=ctk.CTkFont(family=DEFAULT_FONT_FAMILY, size=14)
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=14)
         )
         help_textbox.pack(padx=10, pady=10, fill="both", expand=True)
 
@@ -1298,8 +1347,8 @@ VAD(语音活动检测)静音时长控制断句灵敏度：
 
         # 居中窗口
         help_window.update_idletasks()
-        width = help_window.width
-        height = help_window.height
+        width = help_window.winfo_width()
+        height = help_window.winfo_height()
         x = (help_window.winfo_screenwidth() // 2) - (width // 2)
         y = (help_window.winfo_screenheight() // 2) - (height // 2)
         help_window.geometry(f"+{x}+{y}")
