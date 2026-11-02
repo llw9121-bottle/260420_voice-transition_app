@@ -65,21 +65,6 @@ class BehaviorConfigDialog:
             }
         },
         {
-            "name": "心理咨询记录",
-            "description": "识别咨询中的情绪表达和问题描述",
-            "config": {
-                "behaviors": [
-                    {"name": "情绪表达", "description": "表达自己的情绪和感受", "examples": ["我最近感到很焦虑", "压力很大睡不好"]},
-                    {"name": "问题描述", "description": "描述遇到的问题和困扰", "examples": ["我和同事关系不好", "这件事一直困扰我"]},
-                    {"name": "改变意愿", "description": "表达想要改变的想法", "examples": ["我想调整一下状态", "希望能有所改善"]},
-                    {"name": "成长感悟", "description": "分享自己的感悟和收获", "examples": ["通过这段咨询我明白了", "感觉自己成长了很多"]},
-                    {"name": "咨询师反馈", "description": "咨询师给出的建议和反馈", "examples": ["你可以试着这样做", "我建议你慢慢来"]},
-                ],
-                "enable_paragraph_reorganization": True,
-                "auto_chunk_long_text": True
-            }
-        },
-        {
             "name": "产品需求沟通",
             "description": "识别需求沟通中的各类行为",
             "config": {
