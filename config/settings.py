@@ -330,8 +330,8 @@ def check_api_configuration() -> dict:
     return {
         "dashscope_configured": api.is_dashscope_configured,
         "bailian_configured": api.is_bailian_configured,
-        "dashscope_key_preview": api.dashscope_api_key[:8] + "***" if api.dashscope_api_key else "未设置",
-        "bailian_key_preview": api.bailian_api_key[:8] + "***" if api.bailian_api_key else "未设置(可使用DashScope Key)",
+        "dashscope_key_preview": "已设置" if api.dashscope_api_key else "未设置",
+        "bailian_key_preview": "已设置" if api.bailian_api_key else "未设置(可使用DashScope Key)",
     }
 
 
