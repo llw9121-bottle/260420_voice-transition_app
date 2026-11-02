@@ -443,6 +443,8 @@ A: LLM 判定本身具有随机性，即使固定种子和较低温度也无法�
 
 ## 🛠️ 开发者信息
 
+- **个人主页**：https://longway-li.pages.dev
+
 ### 技术栈
 - Python 3.10+
 - PyAudio - 音频采集
