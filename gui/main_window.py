@@ -824,14 +824,13 @@ class MainWindow:
         if not self._is_recording_flashing:
             return
 
-        # 切换颜色
         current_color = self.recording_indicator.cget("text_color")
         if current_color == "red" or current_color == "#ff0000":
             self.recording_indicator.configure(text_color="#ff6666")
         else:
             self.recording_indicator.configure(text_color="red")
 
-        # 500ms 后再次切换
+        # 闪烁周期 500ms。
         self._recording_indicator_timer_id = self.root.after(500, self._flash_recording_indicator)
 
     def get_selected_style(self) -> str:

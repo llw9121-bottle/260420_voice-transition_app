@@ -88,17 +88,12 @@ class TranscriptionView:
         """
         self.text_widget.configure(state="normal")
         
-        # 如果当前是初始文本，先清除
+        # 首次输出时替换占位文本。
         current_text = self.text_widget.get("0.0", "end-1c")
         if current_text == "等待开始录音...":
             self.text_widget.delete("0.0", "end")
-        
-        # 根据是否是最终结果设置不同的颜色标签
-        if is_final:
-            self.text_widget.insert("end", text)
-        else:
-            # 临时结果用灰色显示
-            self.text_widget.insert("end", text)
+
+        self.text_widget.insert("end", text)
             
         # 更新字数统计
         self._update_word_count(len(text))

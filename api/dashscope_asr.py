@@ -840,7 +840,7 @@ class DashScopeASRClient:
             with self._lock:
                 self.is_running = False
                 # 清空所有缓存引用，帮助垃圾回收
-                # 优雅结束后再合并，包含结束过程中到达的最终结果。
+                # 合并结束过程中到达的最终结果。
                 if self.callback:
                     self._full_transcription_total += self.callback.full_transcription
                     self._full_transcription_total += self.callback.current_partial
