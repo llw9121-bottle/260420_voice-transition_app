@@ -178,14 +178,15 @@
 ##### 本地识别版（音频不出本机）
 
 1. 打开同一个 [v2.0 Releases 页面](https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v2.0)
-2. 下载 `VoiceTranscription-Windows-Local.zip`（约 250MB，已内置识别模型）
+2. 下载 `VoiceTranscription-Windows-Local.zip`（约 300MB，已内置 SenseVoice 识别模型）
 3. 解压到独立文件夹；**`models` 文件夹必须与 exe 位于同一目录**，不要只移动 exe
 4. 双击 `VoiceTranscriptionLocal.exe` 启动
 5. 无需 DashScope API Key，点击「开始录音」即可转写
 
 本地版限制：
 
-- 仅支持中文和英文；转写结果暂不含标点
+- 支持中文、粤语、英文、日语、韩语；转写结果自带标点
+- 识别按语音停顿出句，最终结果通常在停顿后 0.5–1 秒出现
 - 「AI 语义分段」和「行为分析」仍使用阿里云百炼，需要 `BAILIAN_API_KEY`
 - 未配置百炼 Key 时，本地转写、原始转录、清理口语、按停顿分段均可正常使用
 - 建议 4GB 以上内存，预留约 1GB 磁盘空间

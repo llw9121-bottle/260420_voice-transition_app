@@ -362,7 +362,7 @@ def is_local_asr() -> bool:
     return settings.asr.provider == 'local'
 
 
-LOCAL_ASR_LANGUAGES = frozenset({'zh', 'en'})
+LOCAL_ASR_LANGUAGES = frozenset({'zh', 'yue', 'en', 'ja', 'ko'})
 
 
 def normalize_asr_language(code: str) -> str:

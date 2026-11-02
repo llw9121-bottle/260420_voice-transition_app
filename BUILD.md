@@ -53,17 +53,7 @@ pip install pyinstaller==6.22.3
 python scripts/fetch_local_model.py --dest model-cache/models/asr
 ```
 
-默认从模型镜像逐个下载 `encoder.int8.onnx`、`decoder.int8.onnx`、`tokens.txt`（约 237MB），每个文件都按脚本内固定的 SHA256 校验，并生成 `MANIFEST.txt`。
-
-如需从官方归档构建，可使用归档模式：
-
-```bash
-python scripts/fetch_local_model.py \
-  --url https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2 \
-  --sha256 <ARCHIVE_SHA256> \
-  --dest model-cache/models/asr \
-  --cache-dir model-cache
-```
+默认从模型镜像逐个下载 `model.int8.onnx`、`tokens.txt`、`silero_vad.onnx`（约 240MB），每个文件都按脚本内固定的 SHA256 校验，并生成 `MANIFEST.txt`。脚本优先使用 `hf-mirror.com`，失败后回退到 `huggingface.co`；VAD 模型来自 sherpa-onnx 的 GitHub Release。
 
 ### 3. 打包
 
@@ -260,7 +250,7 @@ A: 可以。在 Apple Silicon 机器上打包会生成原生 arm64 版本；在 
 | 平台 | 打包后大小（单文件） | 说明 |
 |------|---------------------|------|
 | Windows（云端版） | 约 45 MB | 当前 `app.spec` one-file 构建，UPX 压缩后 |
-| Windows（本地 ASR 版） | 约 75 MB + 约 230 MB 模型 | `app-local.spec`；模型与 exe 同级，不进临时目录 |
+| Windows（本地 ASR 版） | 约 75 MB + 约 240 MB 模型 | `app-local.spec`；模型与 exe 同级，不进临时目录 |
 | macOS | 约 50-80 MB | 视运行器架构和依赖版本而定 |
 
 ### 测试打包结果

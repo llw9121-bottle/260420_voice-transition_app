@@ -22,39 +22,42 @@ import zipfile
 from pathlib import Path
 
 WHITELIST = {
-    'encoder.int8.onnx',
-    'decoder.int8.onnx',
-    'encoder.onnx',
-    'decoder.onnx',
+    'model.int8.onnx',
+    'model.onnx',
     'tokens.txt',
+    'silero_vad.onnx',
 }
 REQUIRED_SETS = (
-    ('encoder.int8.onnx', 'decoder.int8.onnx', 'tokens.txt'),
-    ('encoder.onnx', 'decoder.onnx', 'tokens.txt'),
+    ('model.int8.onnx', 'tokens.txt', 'silero_vad.onnx'),
+    ('model.onnx', 'tokens.txt', 'silero_vad.onnx'),
 )
 _CHUNK = 1024 * 1024
 
 # 模型来源：优先国内镜像，失败后回退到 Hugging Face 官方地址。
-_REPO_PATH = 'csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en/resolve/main'
+_REPO_PATH = 'csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main'
 DEFAULT_FILE_BASE_URLS = (
     f'https://hf-mirror.com/{_REPO_PATH}',
     f'https://huggingface.co/{_REPO_PATH}',
 )
 DEFAULT_FILES = (
     {
-        'name': 'encoder.int8.onnx',
-        'size': 165462184,
-        'sha256': '81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a',
-    },
-    {
-        'name': 'decoder.int8.onnx',
-        'size': 71664561,
-        'sha256': 'f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f',
+        'name': 'model.int8.onnx',
+        'size': 239233841,
+        'sha256': 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51',
     },
     {
         'name': 'tokens.txt',
-        'size': 75756,
-        'sha256': '59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6',
+        'size': 315894,
+        'sha256': 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc',
+    },
+    {
+        'name': 'silero_vad.onnx',
+        'size': 643854,
+        'sha256': '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
+        'urls': (
+            'https://github.com/k2-fsa/sherpa-onnx/releases/download/'
+            'asr-models/silero_vad.onnx',
+        ),
     },
 )
 
@@ -114,8 +117,10 @@ def fetch_files(base_urls, destination: Path, files) -> set[str]:
             target.unlink()
 
         last_error = None
-        for base_url in base_urls:
-            url = f'{base_url.rstrip("/")}/{name}?download=true'
+        urls = item.get('urls') or [
+            f'{base_url.rstrip("/")}/{name}?download=true' for base_url in base_urls
+        ]
+        for url in urls:
             try:
                 download(url, target)
                 actual = sha256_file(target)
@@ -139,7 +144,7 @@ def fetch_files(base_urls, destination: Path, files) -> set[str]:
             except Exception as exc:
                 last_error = exc
                 target.unlink(missing_ok=True)
-                print(f'[model] 源不可用，尝试下一个: {base_url} ({exc})', flush=True)
+                print(f'[model] 源不可用，尝试下一个: {url} ({exc})', flush=True)
 
         if last_error is not None:
             raise ModelFetchError(f'{name} 下载失败：{last_error}')

@@ -13,11 +13,18 @@ sherpa-onnx 使用的推理运行时（随 sherpa-onnx-core 分发）。
 Source: https://github.com/microsoft/onnxruntime
 License: MIT
 
-Paraformer streaming bilingual zh-en model
-------------------------------------------
-本地转写使用的声学模型。
-Source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
-Model origin: FunASR / Paraformer
+SenseVoice-Small model
+----------------------
+本地转写使用的语音识别模型，自带标点，支持中/粤/英/日/韩。
+Source: https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+Model origin: https://github.com/FunAudioLLM/SenseVoice
 License: 以模型发布页和上游仓库的许可声明为准；分发或商用前请自行核实。
+
+Silero VAD model
+----------------
+语音活动检测模型，用于按停顿切分语音段。
+Source: https://github.com/snakers4/silero-vad
+Model file: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+License: MIT（以发布页为准）
 
 本项目不修改上述组件的源代码。

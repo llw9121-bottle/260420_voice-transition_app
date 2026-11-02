@@ -15,19 +15,20 @@
 目录结构
 --------
 VoiceTranscriptionLocal.exe
-models\asr\encoder.int8.onnx
-models\asr\decoder.int8.onnx
+models\asr\model.int8.onnx
 models\asr\tokens.txt
+models\asr\silero_vad.onnx
 README-LOCAL.txt
 THIRD_PARTY_NOTICES.txt
 LOCAL_BUILD_INFO.txt
 
 已知限制
 --------
-- 本地模型仅支持中文和英文；其他语言会回退到中文。
-- 转写结果暂不含标点。
+- 支持中文、粤语、英文、日语、韩语；其他语言会回退到中文。
+- 转写结果自带标点。
 - 首次启动加载模型需要几秒钟；建议 4GB 以上内存。
-- 模型约 230MB，请预留至少 1GB 磁盘空间。
+- 模型约 240MB，请预留至少 1GB 磁盘空间。
+- 识别按语音停顿出句，最终结果通常在停顿后 0.5–1 秒出现。
 
 AI 整理功能
 -----------

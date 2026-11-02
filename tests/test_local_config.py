@@ -78,10 +78,11 @@ def test_cloud_requires_dashscope_key(monkeypatch):
 
 def test_normalize_language_in_local_mode(monkeypatch):
     monkeypatch.setattr(settings.asr, 'provider', 'local')
-    assert normalize_asr_language('ja') == 'zh'
-    assert normalize_asr_language('yue') == 'zh'
+    assert normalize_asr_language('ja') == 'ja'
+    assert normalize_asr_language('yue') == 'yue'
     assert normalize_asr_language('en') == 'en'
     assert normalize_asr_language('') == 'zh'
+    assert normalize_asr_language('fr') == 'zh'
 
 
 def test_normalize_language_in_cloud_mode(monkeypatch):

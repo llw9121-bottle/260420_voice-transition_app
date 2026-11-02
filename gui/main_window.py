@@ -284,9 +284,15 @@ class MainWindow:
         )
         self.language_label.pack(anchor="w", padx=5, pady=(0, 4))
 
-        # 本地引擎仅支持中英文；云端版保留完整语言列表。
+        # 本地 SenseVoice 支持中/粤/英/日/韩；云端版保留完整语言列表。
         if is_local_asr():
-            language_options = ["zh - 中文", "en - 英文"]
+            language_options = [
+                "zh - 中文",
+                "yue - 粤语",
+                "en - 英文",
+                "ja - 日语",
+                "ko - 韩语",
+            ]
         else:
             language_options = [
                 "zh - 中文",
@@ -347,7 +353,7 @@ class MainWindow:
         if is_local_asr():
             self.local_hint_label = ctk.CTkLabel(
                 asr_inner,
-                text="本地模型仅支持中/英文，转写暂不含标点",
+                text="本地模型支持中/粤/英/日/韩，转写自带标点",
                 font=ctk.CTkFont(AppFonts.FAMILY, 9),
                 text_color=AppColors.TEXT_MUTED,
                 wraplength=300,

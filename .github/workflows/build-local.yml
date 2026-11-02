@@ -48,7 +48,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: model-cache/models/asr
-          key: sherpa-paraformer-bilingual-zh-en-int8-v1
+          key: sensevoice-zh-en-ja-ko-yue-int8-v1
 
       - name: Fetch and verify model
         run: |
@@ -62,7 +62,7 @@ jobs:
           if (-not (Test-Path "dist\VoiceTranscriptionLocal.exe")) {
             throw "构建失败：未生成 dist\VoiceTranscriptionLocal.exe"
           }
-          foreach ($name in @("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")) {
+          foreach ($name in @("model.int8.onnx", "tokens.txt", "silero_vad.onnx")) {
             $path = Join-Path "model-cache\models\asr" $name
             if (-not (Test-Path $path)) { throw "模型文件缺失: $path" }
           }
@@ -78,7 +78,7 @@ jobs:
           flavor=local
           source_commit=${{ github.sha }}
           source_ref=${{ github.ref_name }}
-          model=sherpa-onnx-streaming-paraformer-bilingual-zh-en
+          model=sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
           model_hashes=see models/asr/MANIFEST.txt
           build_utc=$([DateTime]::UtcNow.ToString("o"))
           "@ | Out-File "staging\LOCAL_BUILD_INFO.txt" -Encoding utf8

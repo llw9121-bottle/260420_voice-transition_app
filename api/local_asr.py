@@ -1,11 +1,13 @@
-"""基于 sherpa-onnx 的本地流式语音识别客户端。
+"""基于 sherpa-onnx + SenseVoice 的本地语音识别客户端。
 
-模块顶层不导入 sherpa_onnx：云端构建和离线测试不要求安装本地引擎。
+音频先经 Silero VAD 切分为语音段，再用 SenseVoice 离线识别。
+SenseVoice 自带标点，支持中/英/日/韩/粤；模块顶层不导入 sherpa_onnx。
 """
 
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -15,12 +17,22 @@ import numpy as np
 
 from utils.logger import logger
 
-_INT8_FILES = ('encoder.int8.onnx', 'decoder.int8.onnx', 'tokens.txt')
-_FP32_FILES = ('encoder.onnx', 'decoder.onnx', 'tokens.txt')
-_SPEECH_RMS_THRESHOLD = 0.008
+_INT8_MODEL = 'model.int8.onnx'
+_FP32_MODEL = 'model.onnx'
+_TOKENS = 'tokens.txt'
+_VAD_MODEL = 'silero_vad.onnx'
+_TAG_RE = re.compile(r'<\|[^|]*\|>')
+
 _QUEUE_MAX_CHUNKS = 512          # 512 * 64ms ≈ 32 秒
 _STOP_TIMEOUT_SECONDS = 5.0
+_PARTIAL_INTERVAL = 1.5
+_MAX_PARTIAL_SECONDS = 5.0
+_VAD_THRESHOLD = 0.5
+_VAD_WINDOW = 512
+_VAD_MIN_SPEECH = 0.2
+_VAD_MAX_SPEECH = 20.0
 _SENTINEL = object()
+_SUPPORTED_LANGUAGES = {'zh', 'en', 'ja', 'ko', 'yue'}
 
 
 class LocalASRError(RuntimeError):
@@ -35,9 +47,9 @@ def _load_sherpa():
 
 
 class LocalASRClient:
-    """满足 RealtimeTranscriber 客户端契约的本地实现。
+    """满足 RealtimeTranscriber 客户端契约的 SenseVoice 实现。
 
-    对外接口与 DashScopeASRClient 保持一致；不支持网络重连。
+    VAD 负责断句，SenseVoice 负责识别；对外接口与 DashScopeASRClient 一致。
     """
 
     supports_reconnect = False
@@ -54,12 +66,16 @@ class LocalASRClient:
         self._num_threads = num_threads
 
         self._lock = threading.RLock()
+        self._vad_lock = threading.RLock()
+        self._decode_lock = threading.RLock()
         self._queue: queue.Queue = queue.Queue(maxsize=_QUEUE_MAX_CHUNKS)
         self._callbacks = {}
 
         self._recognizer = None
-        self._stream = None
+        self._vad = None
         self._worker: Optional[threading.Thread] = None
+        self._partial_thread: Optional[threading.Thread] = None
+        self._partial_stop = threading.Event()
 
         self._started = False
         self._stopped = False
@@ -93,24 +109,21 @@ class LocalASRClient:
                 model_dir = self._resolve_model_dir()
                 files = self._resolve_model_files(model_dir)
                 sherpa = _load_sherpa()
-                silence = self._endpoint_silence_seconds()
 
-                self._recognizer = sherpa.OnlineRecognizer.from_paraformer(
+                self._recognizer = sherpa.OfflineRecognizer.from_sense_voice(
+                    model=str(files['model']),
                     tokens=str(files['tokens']),
-                    encoder=str(files['encoder']),
-                    decoder=str(files['decoder']),
                     num_threads=self._resolve_threads(),
                     sample_rate=self._sample_rate,
                     feature_dim=80,
                     decoding_method='greedy_search',
-                    enable_endpoint_detection=True,
-                    rule1_min_trailing_silence=max(2.4, silence * 2),
-                    rule2_min_trailing_silence=silence,
-                    rule3_min_utterance_length=20.0,
                     provider='cpu',
+                    language=self._sense_voice_language(),
+                    use_itn=True,
                     debug=False,
                 )
-                self._stream = self._recognizer.create_stream()
+                self._vad = self._build_vad(sherpa, files['vad'])
+
                 self._callbacks = {
                     'on_partial': on_partial,
                     'on_final': on_final,
@@ -119,6 +132,7 @@ class LocalASRClient:
                     'on_error': on_error,
                 }
                 self._interrupted.clear()
+                self._partial_stop.clear()
                 self._started = True
                 self._stopped = False
                 self._stop_result = None
@@ -126,8 +140,12 @@ class LocalASRClient:
                 self._worker = threading.Thread(
                     target=self._run, name='local-asr-worker', daemon=True
                 )
+                self._partial_thread = threading.Thread(
+                    target=self._partial_loop, name='local-asr-partial', daemon=True
+                )
                 self._worker.start()
-                logger.info(f'[LocalASR] 已启动，模型目录: {model_dir}')
+                self._partial_thread.start()
+                logger.info(f'[LocalASR] 已启动（SenseVoice），模型目录: {model_dir}')
                 return True
 
             except Exception as exc:
@@ -149,7 +167,7 @@ class LocalASRClient:
             return False
 
     def stop(self, timeout: int = 5) -> bool:
-        """停止并冲刷最后一句；幂等且有明确时限。"""
+        """停止并冲刷最后一个语音段；幂等且有明确时限。"""
         with self._lock:
             if self._stopped:
                 return True if self._stop_result is None else self._stop_result
@@ -157,13 +175,14 @@ class LocalASRClient:
             self._started = False
             worker = self._worker
 
+        limit = max(0.1, float(timeout or _STOP_TIMEOUT_SECONDS))
+        deadline = time.monotonic() + limit
+        self._partial_stop.set()
+
         if worker is None:
             self._release()
             self._stop_result = True
             return True
-
-        limit = max(0.1, float(timeout or _STOP_TIMEOUT_SECONDS))
-        deadline = time.monotonic() + limit
 
         try:
             self._queue.put(_SENTINEL, timeout=min(1.0, limit))
@@ -178,7 +197,7 @@ class LocalASRClient:
             worker.join(max(0.0, deadline - time.monotonic()))
 
         if worker.is_alive():
-            # 解码器可能卡在单个长块上；放弃剩余音频，保留已识别的文本。
+            # 解码器可能卡在单个长段上；放弃剩余音频，保留已识别的文本。
             self._interrupted.set()
             worker.join(max(0.0, deadline - time.monotonic()))
 
@@ -195,6 +214,7 @@ class LocalASRClient:
     def interrupt(self) -> None:
         """丢弃尚未解码的音频，用于停止收尾超时。"""
         self._interrupted.set()
+        self._partial_stop.set()
 
     # ------------------------------------------------------------------ 查询
 
@@ -213,13 +233,14 @@ class LocalASRClient:
         with self._lock:
             return {
                 'provider': 'local',
+                'engine': 'sensevoice',
                 'is_connected': self.is_connected(),
                 'final_segments': len(self._final_texts),
                 'decoded_seconds': self._decoded_seconds,
                 'queue_size': self._queue.qsize(),
             }
 
-    # ------------------------------------------------------------------ 解码线程
+    # ------------------------------------------------------------------ 音频线程
 
     def _run(self) -> None:
         fatal: Optional[Exception] = None
@@ -239,12 +260,16 @@ class LocalASRClient:
                 break
 
         try:
-            self._flush_final()
+            self._flush_vad()
         except Exception as exc:
             logger.exception(f'[LocalASR] 收尾失败: {exc}')
             if fatal is None:
                 self.last_error = self._friendly_error(exc)
         finally:
+            self._partial_stop.set()
+            partial = self._partial_thread
+            if partial is not None and partial is not threading.current_thread():
+                partial.join(1.0)
             self._release()
 
         if fatal is not None:
@@ -258,85 +283,107 @@ class LocalASRClient:
         if samples.size == 0:
             return
 
-        rms = float(np.sqrt(np.mean(np.square(samples))))
-        if rms >= _SPEECH_RMS_THRESHOLD and not self._speech_active:
-            self._speech_active = True
-            self._emit('on_speech_start')
+        segments = []
+        with self._vad_lock:
+            was_active = self._speech_active
+            self._vad.accept_waveform(samples)
+            active = self._vad.is_speech_detected()
+            if active and not was_active:
+                self._speech_active = True
+                self._emit('on_speech_start')
+            while not self._vad.empty():
+                segment = self._vad.front
+                segments.append(np.asarray(segment.samples, dtype=np.float32).copy())
+                self._vad.pop()
 
-        self._stream.accept_waveform(self._sample_rate, samples)
-        while self._recognizer.is_ready(self._stream):
-            self._recognizer.decode_stream(self._stream)
+        self._decoded_seconds += samples.size / float(self._sample_rate)
+        for segment_samples in segments:
+            self._finish_segment(segment_samples)
 
-        text = self._current_text()
+    def _finish_segment(self, samples) -> None:
+        text = self._transcribe(samples)
+        if self._speech_active:
+            self._emit('on_speech_stop')
+        if text:
+            with self._lock:
+                self._final_texts.append(text)
+                self._last_partial = ''
+            self._emit('on_final', text)
+        self._speech_active = False
+
+    def _flush_vad(self) -> None:
+        if self._vad is None:
+            return
+
+        segments = []
+        with self._vad_lock:
+            self._vad.flush()
+            while not self._vad.empty():
+                segment = self._vad.front
+                segments.append(np.asarray(segment.samples, dtype=np.float32).copy())
+                self._vad.pop()
+
+        for segment_samples in segments:
+            self._finish_segment(segment_samples)
+
+        if self._speech_active:
+            self._emit('on_speech_stop')
+            self._speech_active = False
+
+    # ------------------------------------------------------------------ 中间结果
+
+    def _partial_loop(self) -> None:
+        while not self._partial_stop.wait(_PARTIAL_INTERVAL):
+            try:
+                self._emit_partial()
+            except Exception as exc:
+                logger.debug(f'[LocalASR] 中间结果解码失败: {exc}')
+
+    def _emit_partial(self) -> None:
+        with self._vad_lock:
+            if self._vad is None or not self._vad.is_speech_detected():
+                return
+            segment = self._vad.current_segment
+            samples = np.asarray(segment.samples, dtype=np.float32).copy()
+
+        if samples.size == 0:
+            return
+        if samples.size / float(self._sample_rate) > _MAX_PARTIAL_SECONDS:
+            return
+        # 上一轮中间解码还没结束就跳过，避免占满 CPU。
+        if not self._decode_lock.acquire(blocking=False):
+            return
+        try:
+            text = self._transcribe_unlocked(samples)
+        finally:
+            self._decode_lock.release()
+
         if text and text != self._last_partial:
             with self._lock:
                 self._last_partial = text
             self._emit('on_partial', text)
 
-        self._decoded_seconds += samples.size / float(self._sample_rate)
+    # ------------------------------------------------------------------ 识别
 
-        if self._recognizer.is_endpoint(self._stream):
-            self._finish_endpoint()
-        elif self._decoded_seconds >= self._max_session_seconds:
-            # 连续说话可能长时间不触发 endpoint，主动收一段避免状态无限增长。
-            self._finish_endpoint()
+    def _transcribe(self, samples) -> str:
+        with self._decode_lock:
+            return self._transcribe_unlocked(samples)
 
-    def _finish_endpoint(self) -> None:
-        if self._recognizer is None or self._stream is None:
-            return
+    def _transcribe_unlocked(self, samples) -> str:
+        if samples is None or len(samples) == 0:
+            return ''
+        stream = self._recognizer.create_stream()
+        stream.accept_waveform(self._sample_rate, samples)
+        self._recognizer.decode_stream(stream)
+        result = getattr(stream, 'result', None)
+        return self._clean_text(getattr(result, 'text', ''))
 
-        while self._recognizer.is_ready(self._stream):
-            self._recognizer.decode_stream(self._stream)
-
-        text = self._current_text()
-        if self._speech_active:
-            self._emit('on_speech_stop')
-        if text:
-            with self._lock:
-                self._final_texts.append(text)
-                self._last_partial = ''
-            self._emit('on_final', text)
-
-        self._recognizer.reset(self._stream)
-        self._speech_active = False
-        self._decoded_seconds = 0.0
-
-    def _flush_final(self) -> None:
-        if self._recognizer is None or self._stream is None:
-            return
-
-        tail = np.zeros(int(self._sample_rate * 0.3), dtype=np.float32)
-        self._stream.accept_waveform(self._sample_rate, tail)
-        if hasattr(self._stream, 'input_finished'):
-            self._stream.input_finished()
-
-        while self._recognizer.is_ready(self._stream):
-            self._recognizer.decode_stream(self._stream)
-
-        text = self._current_text()
-        if self._speech_active:
-            self._emit('on_speech_stop')
-        if text:
-            with self._lock:
-                self._final_texts.append(text)
-                self._last_partial = ''
-            self._emit('on_final', text)
-
-        self._speech_active = False
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        # SenseVoice 会附带 <|zh|><|NEUTRAL|><|Speech|> 等标签。
+        return _TAG_RE.sub('', text or '').strip()
 
     # ------------------------------------------------------------------ 辅助
-
-    def _current_text(self) -> str:
-        if self._recognizer is None or self._stream is None:
-            return ''
-        try:
-            result = self._recognizer.get_result(self._stream)
-        except Exception:
-            return ''
-        # sherpa-onnx 2.x 返回 str；旧版本/其他封装可能返回带 text 的对象。
-        if isinstance(result, str):
-            return result.strip()
-        return (getattr(result, 'text', '') or '').strip()
 
     def _emit(self, name: str, *args) -> None:
         callback = (self._callbacks or {}).get(name)
@@ -348,16 +395,20 @@ class LocalASRClient:
             logger.exception(f'[LocalASR] {name} 回调异常')
 
     def _release(self) -> None:
-        self._stream = None
+        self._vad = None
         self._recognizer = None
 
     def _validate_language(self) -> None:
         language = (getattr(self.config, 'language', 'zh') or 'zh').strip()
-        if language not in ('zh', 'en'):
+        if language not in _SUPPORTED_LANGUAGES:
             raise LocalASRError(
-                f'本地版语音识别仅支持中文（zh）和英文（en），'
+                f'本地版语音识别仅支持中文、英文、日语、韩语和粤语，'
                 f'当前设置为“{language}”。请在设置中切换语言。'
             )
+
+    def _sense_voice_language(self) -> str:
+        language = (getattr(self.config, 'language', 'zh') or 'zh').strip()
+        return language if language in _SUPPORTED_LANGUAGES else 'auto'
 
     def _resolve_model_dir(self) -> Path:
         if self._model_dir is not None:
@@ -367,25 +418,45 @@ class LocalASRClient:
         return get_local_asr_model_dir()
 
     def _resolve_model_files(self, model_dir: Path) -> dict:
-        for names in (_INT8_FILES, _FP32_FILES):
-            paths = {
-                'encoder': model_dir / names[0],
-                'decoder': model_dir / names[1],
-                'tokens': model_dir / names[2],
-            }
-            if all(path.is_file() for path in paths.values()):
-                return paths
+        model = model_dir / _INT8_MODEL
+        if not model.is_file():
+            model = model_dir / _FP32_MODEL
+        files = {
+            'model': model,
+            'tokens': model_dir / _TOKENS,
+            'vad': model_dir / _VAD_MODEL,
+        }
+        missing = [path.name for path in files.values() if not path.is_file()]
+        if missing:
+            raise LocalASRError(
+                f'本地 ASR 模型缺失：在 {model_dir} 下未找到 {", ".join(missing)}。\n'
+                '请确认 models\\asr 与程序 exe 位于同一目录；'
+                '如果是从压缩包运行，请先完整解压。'
+            )
+        return files
 
-        expected = ' / '.join(_INT8_FILES)
-        raise LocalASRError(
-            f'本地 ASR 模型缺失：在 {model_dir} 下未找到 {expected}。\n'
-            '请确认 models\\asr 与程序 exe 位于同一目录；'
-            '如果是从压缩包运行，请先完整解压。'
+    def _build_vad(self, sherpa, vad_model_path: Path):
+        silence = self._silence_seconds()
+        silero = sherpa.SileroVadModelConfig(
+            model=str(vad_model_path),
+            threshold=_VAD_THRESHOLD,
+            min_silence_duration=silence,
+            min_speech_duration=_VAD_MIN_SPEECH,
+            window_size=_VAD_WINDOW,
+            max_speech_duration=_VAD_MAX_SPEECH,
         )
+        config = sherpa.VadModelConfig(
+            silero_vad=silero,
+            sample_rate=self._sample_rate,
+            num_threads=1,
+            provider='cpu',
+            debug=False,
+        )
+        return sherpa.VoiceActivityDetector(config, buffer_size_in_seconds=60)
 
-    def _endpoint_silence_seconds(self) -> float:
+    def _silence_seconds(self) -> float:
         vad_ms = float(getattr(self.config, 'vad_silence_ms', 400) or 400)
-        return max(0.6, min(3.0, vad_ms / 1000.0))
+        return max(0.3, min(2.0, vad_ms / 1000.0))
 
     def _resolve_threads(self) -> int:
         if self._num_threads:
