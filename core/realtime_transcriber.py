@@ -10,20 +10,12 @@
 - 会话管理和资源清理
 """
 
-import io
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, List
-
-# 设置标准输出编码为UTF-8
-# PyInstaller console=False 模式下 stdout/stderr 可能为 None，需要检查
-if sys.stdout is not None and hasattr(sys.stdout, 'buffer'):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-if sys.stderr is not None and hasattr(sys.stderr, 'buffer'):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 添加项目根目录到Python路径（仅源码运行需要）
 if not getattr(sys, 'frozen', False):
@@ -32,7 +24,9 @@ if not getattr(sys, 'frozen', False):
 
 from core.audio_recorder import AudioRecorder, AudioConfig
 from api.dashscope_asr import DashScopeASRClient, ASRConfig, ASRResult
+from config.settings import preview_asr_content
 from utils.logger import logger
+from core.formatter.base import TranscriptionSegment
 
 
 @dataclass
@@ -92,7 +86,8 @@ class RealtimeTranscriber:
         max_session_duration: float = 20 * 60,
         auto_reconnect: Optional[bool] = None,
         max_reconnect_attempts: Optional[int] = None,
-        save_audio: bool = True
+        save_audio: bool = True,
+        audio_path: Optional[Path] = None,
     ):
         """
         初始化实时转录器
@@ -110,7 +105,7 @@ class RealtimeTranscriber:
             max_reconnect_attempts: 最大重连尝试次数，默认从配置读取
             save_audio: 是否保存完整音频数据用于导出WAV文件，默认True
         """
-        # 优先使用传入的参数，然后使用settings中的配置
+        # 显式参数优先，未提供时回退到全局配置。
         from config.settings import settings
         self.api_key = api_key or settings.api.dashscope_api_key
         self.sample_rate = sample_rate
@@ -131,7 +126,7 @@ class RealtimeTranscriber:
             chunk_size=1024,
             save_audio=save_audio
         )
-        self.recorder = AudioRecorder(config=self.audio_config)
+        self.recorder = AudioRecorder(config=self.audio_config, audio_path=audio_path)
 
         # ASR 客户端
         self.asr_config = ASRConfig(
@@ -162,12 +157,21 @@ class RealtimeTranscriber:
         self.full_transcription = ""
         self.partial_buffer = ""
 
-        # 缓存录音数据（stop后保存需要）
-        self._cached_audio_data: Optional[bytes] = None
-
         # 线程
         self._recognition_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._sender_thread = None
+        self._drain_deadline = None
+        self._result_lock = threading.RLock()
+        self.failed_audio_bytes = 0
+        self.unsent_audio_bytes = 0
+        self.last_error = ''
+        self._paused_at = None
+        self._paused_seconds = 0.0
+        self.segments = []
+        self.on_segment = None
+        self._sent_start = self._sent_end = 0.0
+        self._speech_start = self._speech_end = None
         
         logger.info("RealtimeTranscriber 初始化完成")
     
@@ -177,7 +181,8 @@ class RealtimeTranscriber:
         on_partial: Optional[Callable[[str], None]] = None,
         on_final: Optional[Callable[[str], None]] = None,
         on_status_change: Optional[Callable[[str], None]] = None,
-        device_index: Optional[int] = None
+        device_index: Optional[int] = None,
+        on_segment: Optional[Callable[[TranscriptionSegment], None]] = None,
     ) -> bool:
         """
         开始实时转录
@@ -197,6 +202,18 @@ class RealtimeTranscriber:
             return False
         
         try:
+            self.full_transcription = ''
+            self.partial_buffer = ''
+            self.failed_audio_bytes = self.unsent_audio_bytes = 0
+            self.last_error = ''
+            self._paused_seconds = 0.0
+            self._paused_at = None
+            self._drain_deadline = None
+            self._stop_event.clear()
+            self.segments = []
+            self.on_segment = on_segment
+            self._sent_start = self._sent_end = 0.0
+            self._speech_start = self._speech_end = None
             # 保存回调
             self.on_text_callback = on_text
             self.on_partial = on_partial
@@ -221,6 +238,11 @@ class RealtimeTranscriber:
             
             if not started:
                 logger.error("[Transcriber] ASR 服务启动失败")
+                self.last_error = (
+                    getattr(self.asr_client, 'last_error', '')
+                    or '无法连接语音识别服务，请检查网络与 API 配置'
+                )
+                self._cleanup()
                 self._update_status("connection_failed")
                 return False
             
@@ -231,19 +253,14 @@ class RealtimeTranscriber:
             logger.info("[Transcriber] 开始音频录制...")
             self._update_status("starting_recording")
             
-            def on_audio(data: bytes):
-                """音频数据回调 - 实时发送给 ASR"""
-                if self.asr_client and self.state.is_recording:
-                    self.asr_client.send_audio(data)
-            
             self.recorder.start(
-                on_audio=on_audio,
                 device_index=device_index
             )
             
             self.state.is_recording = True
-            self.state.start_time = time.time()
-            self._stop_event.clear()
+            self.state.start_time = time.monotonic()
+            self._sender_thread = threading.Thread(target=self._send_audio_loop, name='asr-sender', daemon=True)
+            self._sender_thread.start()
             
             self._update_status("recording")
             logger.info("[Transcriber] 实时转录已启动")
@@ -251,10 +268,43 @@ class RealtimeTranscriber:
             return True
             
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"[Transcriber] 启动失败: {e}")
             self._update_status(f"error: {e}")
             self._cleanup()
             return False
+
+    def _send_audio_loop(self):
+        """网络发送与重连均在独立线程执行，采集回调只入队。"""
+        interrupted = False
+        while True:
+            if self._stop_event.is_set():
+                if self.recorder.audio_queue.empty() or time.monotonic() >= self._drain_deadline:
+                    break
+            chunk = self.recorder.get_audio_chunk(timeout=0.1)
+            if chunk is None:
+                continue
+            data = chunk.data
+            bytes_per_second = self.sample_rate * 2
+            self._sent_start = chunk.start_byte / bytes_per_second
+            self._sent_end = (chunk.start_byte + len(data)) / bytes_per_second
+            try:
+                sent = self.asr_client.send_audio(data)
+            except Exception as error:
+                self.last_error = str(error)
+                sent = False
+            if not sent:
+                self.failed_audio_bytes += len(data)
+                if not interrupted:
+                    self._update_status('reconnecting')
+                interrupted = True
+            elif interrupted:
+                self._update_status('recording')
+                interrupted = False
+        while not self.recorder.audio_queue.empty():
+            data = self.recorder.get_audio_data(timeout=0)
+            if data is not None:
+                self.unsent_audio_bytes += len(data)
     
     def stop(self) -> str:
         """
@@ -270,15 +320,6 @@ class RealtimeTranscriber:
         logger.info("[Transcriber] 正在停止转录...")
         self._update_status("stopping")
         
-        # 设置停止事件
-        self._stop_event.set()
-
-        # 缓存完整音频数据（在 recorder 清理之前获取）
-        # 不管 save_audio 配置，总是获取一次，因为用户可能在GUI勾选了保存
-        # 这里直接获取 recorder 当前累积的数据，保证在 recorder.stop() 清空之前拿到
-        self._cached_audio_data = self.recorder.get_recorded_data()
-        logger.info(f"[Transcriber] 缓存音频数据完成，大小: {len(self._cached_audio_data)} bytes, save_audio={self.recorder.config.save_audio}")
-
         # 停止音频录制
         try:
             self.recorder.stop()
@@ -286,38 +327,55 @@ class RealtimeTranscriber:
         except Exception as e:
             logger.error(f"[Transcriber] 停止录音失败: {e}")
 
+        self._drain_deadline = time.monotonic() + 5.0
+        self._stop_event.set()
+        if self.asr_client:
+            self.asr_client.cancel_reconnect()
+        if self._sender_thread:
+            self._sender_thread.join(timeout=6.0)
+            if self._sender_thread.is_alive():
+                # 中断阻塞的 socket 写入，避免后台发送线程在下一会话继续运行。
+                self.asr_client.interrupt()
+                self._sender_thread.join(timeout=2.0)
+                if self._sender_thread.is_alive():
+                    raise RuntimeError('音频发送线程尚未退出，请稍后重试停止')
+
         # 结束 ASR 会话
         if self.asr_client:
             try:
                 # 停止 ASR 服务并获取转录结果
                 self.asr_client.stop()
-                time.sleep(0.5)  # 等待最后结果
-                self.full_transcription = self.asr_client.get_transcription()
                 logger.debug("[Transcriber] ASR 会话已结束")
             except Exception as e:
                 logger.error(f"[Transcriber] 结束 ASR 会话失败: {e}")
+            finally:
+                self.asr_client = None
         
-        # 计算统计（先保存到局部变量，再重置，保证时长不丢失）
-        calculated_duration = 0.0
-        if self.state.start_time:
-            calculated_duration = time.time() - self.state.start_time
+        # 先保存时长再重置状态，避免统计丢失。
+        calculated_duration = self.get_duration()
+        # 保留最后一条临时结果，避免被已清理的 ASR 客户端覆盖。
+        with self._result_lock:
+            if self.partial_buffer:
+                self._publish_segment(self.partial_buffer)
+                self.full_transcription = (self.full_transcription + ' ' + self.partial_buffer).strip()
+                self.partial_buffer = ''
 
-        # 关闭连接
         self._cleanup()
         self.state.reset()
 
-        # 保存计算好的时长，即使 reset 之后仍然保留
+        # reset 会清零状态，停止后仍需保留本次录音时长。
         self.state.audio_duration = calculated_duration
         self._update_status("stopped")
 
         logger.info(f"[Transcriber] 转录完成，时长: {self.state.audio_duration:.1f}秒")
-        logger.info(f"[Transcriber] 完整文本: {self.full_transcription[:100]}...")
+        logger.info(f"[Transcriber] 完整文本: {preview_asr_content(self.full_transcription, 100)}")
         
         return self.full_transcription
     
     def _on_asr_partial(self, text: str):
         """ASR 中间结果回调"""
-        self.partial_buffer = text
+        with self._result_lock:
+            self.partial_buffer = text
         
         if self.on_partial:
             try:
@@ -334,13 +392,9 @@ class RealtimeTranscriber:
     def _on_asr_final(self, text: str):
         """ASR 最终结果回调"""
         # 累加到完整转录
-        if self.full_transcription:
-            self.full_transcription += " " + text
-        else:
-            self.full_transcription = text
-        
-        # 清空中间结果
-        self.partial_buffer = ""
+        with self._result_lock:
+            self.full_transcription = (self.full_transcription + ' ' + text).strip()
+            self.partial_buffer = ''
         
         if self.on_final:
             try:
@@ -353,21 +407,41 @@ class RealtimeTranscriber:
                 self.on_text_callback(text, True)
             except Exception as e:
                 logger.error(f"[Transcriber] 文本回调出错: {e}")
+        self._publish_segment(text)
+
+    def _publish_segment(self, text: str):
+        """使用音频发送位置估计句界，暂停不产生额外音频时间。"""
+        previous_end = self.segments[-1].end_time if self.segments else 0.0
+        start = self._speech_start if self._speech_start is not None else previous_end
+        end = self._speech_end if self._speech_end is not None else self._sent_end
+        captured = self.recorder.get_duration()
+        start = min(captured, max(previous_end, start))
+        end = min(captured, max(start, end))
+        segment = TranscriptionSegment(text, start, end, timing_source='estimated')
+        self.segments.append(segment)
+        self._speech_start = self._speech_end = None
+        if self.on_segment:
+            self.on_segment(segment)
     
     def _on_speech_start(self):
         """检测到开始说话"""
         logger.debug("[Transcriber] 检测到开始说话")
+        self._speech_start = self._sent_start
+        self._speech_end = None
         self._update_status("speech_start")
     
     def _on_speech_stop(self):
         """检测到停止说话"""
         logger.debug("[Transcriber] 检测到停止说话")
+        self._speech_end = self._sent_end
         self._update_status("speech_stop")
     
     def _on_asr_error(self, error: Exception):
         """ASR 错误回调"""
         logger.error(f"[Transcriber] ASR 错误: {error}")
-        self._update_status(f"asr_error: {error}")
+        message = getattr(error, 'message', str(error))
+        self.last_error = message
+        self._update_status(f"asr_error: {message}")
     
     def _update_status(self, status: str):
         """更新状态"""
@@ -392,28 +466,19 @@ class RealtimeTranscriber:
         except Exception as e:
             logger.debug(f"[Transcriber] 清理音频录制器时出错: {e}")
 
-        # 清空所有回调引用，避免循环引用
+        # 释放回调引用，避免对象图长期驻留。
         self.on_text_callback = None
         self.on_partial = None
         self.on_final = None
-        self.on_status_change = None
-
-        # 清空累积文本
-        self.full_transcription = ""
-        self.partial_buffer = ""
+        self.on_segment = None
 
         self.state.is_recording = False
         self.state.is_connected = False
     
     def get_transcription(self) -> str:
         """获取当前完整转录文本"""
-        # 如果有 ASR 客户端，获取最新结果
-        if self.asr_client:
-            asr_text = self.asr_client.get_transcription()
-            if asr_text:
-                self.full_transcription = asr_text
-        
-        return self.full_transcription.strip()
+        with self._result_lock:
+            return self.full_transcription.strip()
     
     def get_current_partial(self) -> str:
         """获取当前中间结果"""
@@ -444,6 +509,7 @@ class RealtimeTranscriber:
 
         logger.info("[Transcriber] 暂停录音")
         self.recorder.pause()
+        self._paused_at = time.monotonic()
         self._update_status("paused")
 
     def resume(self) -> None:
@@ -462,12 +528,16 @@ class RealtimeTranscriber:
 
         logger.info("[Transcriber] 恢复录音")
         self.recorder.resume()
+        if self._paused_at is not None:
+            self._paused_seconds += time.monotonic() - self._paused_at
+            self._paused_at = None
         self._update_status("recording")
 
     def get_duration(self) -> float:
         """获取录制时长"""
         if self.state.start_time and self.state.is_recording:
-            return time.time() - self.state.start_time
+            end = self._paused_at if self._paused_at is not None else time.monotonic()
+            return max(0.0, end - self.state.start_time - self._paused_seconds)
         return self.state.audio_duration
 
     def save_audio_wav(self, output_path: Path) -> None:
@@ -477,36 +547,7 @@ class RealtimeTranscriber:
         Args:
             output_path: 输出文件路径
         """
-        # 使用 stop 时缓存的数据（因为 recorder.stop() 已经清空了 recorded_frames）
-        # 总是使用缓存，如果缓存为空才回退到直接从 recorder 获取
-        if self._cached_audio_data is not None and len(self._cached_audio_data) > 0:
-            import wave
-
-            # 确保输出目录存在
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # 创建 WAV 文件
-            with wave.open(str(output_path), 'wb') as wf:
-                wf.setnchannels(self.recorder.config.channels)
-                wf.setsampwidth(self.recorder.audio.get_sample_size(self.recorder.config.format))
-                wf.setframerate(self.recorder.config.sample_rate)
-                wf.writeframes(self._cached_audio_data)
-
-            logger.info(f"原始录音已保存: {output_path} ({len(self._cached_audio_data)} bytes) [from cache]");
-        elif self._cached_audio_data is not None and len(self._cached_audio_data) == 0:
-            # 缓存为空（用户没说话或者全暂停），仍然保存一个空文件
-            import wave
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with wave.open(str(output_path), 'wb') as wf:
-                wf.setnchannels(self.recorder.config.channels)
-                wf.setsampwidth(self.recorder.audio.get_sample_size(self.recorder.config.format))
-                wf.setframerate(self.recorder.config.sample_rate)
-                wf.writeframes(b'')
-            logger.warning(f"原始录音为空，保存空文件: {output_path} (0 bytes) [from cache]");
-        else:
-            # 如果没有缓存（异常情况），回退到直接从 recorder 获取
-            logger.debug(f"缓存为空，回退到直接从 recorder 获取");
-            self.recorder.save_wav(output_path)
+        self.recorder.save_wav(output_path)
 
     def get_audio_duration(self) -> float:
         """
@@ -556,7 +597,7 @@ if __name__ == "__main__":
     print("基本功能测试完成！")
     print("=" * 60)
     
-    # 注意：实际测试需要有效的 API Key
+    # 完整功能需要有效 API Key 和麦克风权限。
     print("\n提示: 要测试完整功能，需要:")
     print("  1. 配置有效的 DashScope API Key")
     print("  2. 运行 test_realtime_asr.py 完整测试")

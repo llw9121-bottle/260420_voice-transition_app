@@ -16,12 +16,11 @@ a = Analysis(
     hiddenimports=[
         'pyaudio',
         'customtkinter',
-        'PIL',
         'loguru',
         'pydantic',
         'pydantic_settings',
-        'python-dotenv',
-        'openai',
+        'dotenv',
+        'requests',
         'dashscope',
         'docx',
     ],
@@ -62,7 +61,7 @@ app = BUNDLE(
     bundle_id='com.yourname.VoiceTranscription',
     info_plist={
         'NSMicrophoneUsageDescription': '需要麦克风权限进行语音录音',
-        'CFBundleShortVersionString': '1.1.0',
-        'CFBundleVersion': '1.1.0',
+        'CFBundleShortVersionString': '2.0.0',
+        'CFBundleVersion': '2.0.0',
     },
 )

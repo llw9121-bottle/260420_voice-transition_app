@@ -7,6 +7,8 @@
 
 import json
 import sys
+import threading
+from queue import Empty, Queue
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pathlib import Path
@@ -19,7 +21,7 @@ from core.formatter.naming import NamingStrategy
 from gui.theme import AppColors, AppFonts
 
 # 获取正确的项目根目录（支持PyInstaller打包）
-from config.settings import project_root
+from config.settings import project_root, settings
 
 
 class ExportDialog:
@@ -49,6 +51,10 @@ class ExportDialog:
         self.parent = parent
         self.document = document
         self.on_export = on_export
+        self.is_exporting = False
+        self._closed = False
+        self._results = Queue(maxsize=1)
+        self._filename_time = datetime.now()
 
         # 创建对话框
         self.window = ctk.CTkToplevel(parent)
@@ -59,6 +65,7 @@ class ExportDialog:
         # 模态对话框
         self.window.transient(parent)
         self.window.grab_set()
+        self.window.protocol('WM_DELETE_WINDOW', self._on_cancel)
 
         # 导出配置
         self.export_format = ctk.StringVar(value="markdown")
@@ -69,6 +76,10 @@ class ExportDialog:
 
         # 创建界面
         self._create_ui()
+        for variable in (self.export_format, self.filename_template, self.custom_filename, self.output_dir):
+            variable.trace_add('write', lambda *args: self._update_preview())
+        self._on_template_change(self.template_menu.get())
+        self._update_preview()
         
     def _create_ui(self):
         """创建用户界面"""
@@ -112,16 +123,17 @@ class ExportDialog:
         title_label = ctk.CTkLabel(
             info_frame,
             text=f"文档: {title}",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=13, weight="bold"), wraplength=510, justify='left'
         )
         title_label.pack(anchor="w", padx=12, pady=(8, 2))
 
         # 统计信息
-        stats_text = f"字数: {self.document.word_count} | 时长: {int(self.document.duration_seconds)}秒 | 风格: {self.document.style.value}"
+        styles = {'raw': '原始转录', 'cleaned': '清理口语', 'paragraphs': '段落整理', 'behavior_match': '行为分析'}
+        stats_text = f'字数: {self.document.word_count} | 时长: {int(self.document.duration_seconds)}秒 | 风格: {styles[self.document.style.value]}'
         stats_label = ctk.CTkLabel(
             info_frame,
             text=stats_text,
-            font=ctk.CTkFont(size=10),
+            font=ctk.CTkFont(*AppFonts.BODY_SMALL),
             text_color=AppColors.TEXT_MUTED
         )
         stats_label.pack(anchor="w", padx=12, pady=(2, 8))
@@ -166,70 +178,19 @@ class ExportDialog:
             },
         ]
 
-        # 为每个格式创建卡片
         self.format_cards = {}
         for fmt in formats:
-            # 外层卡片（视觉边界）
             card = ctk.CTkFrame(format_frame, corner_radius=8)
-            card.pack(fill="x", pady=4)
-
-            # 存储卡片引用以便更新选中状态
-            self.format_cards[fmt["value"]] = card
-
-            # 内部内容布局
-            inner_frame = ctk.CTkFrame(card, fg_color="transparent")
-            inner_frame.pack(fill="x", padx=12, pady=10)
-
-            # 左侧：RadioButton + 图标 + 标题
-            left_frame = ctk.CTkFrame(inner_frame, fg_color="transparent")
-            left_frame.pack(side="left", fill="y")
-
-            radio = ctk.CTkRadioButton(
-                left_frame,
-                text="",
-                variable=self.export_format,
-                value=fmt["value"],
-                command=lambda v=fmt["value"]: self._on_format_selected(v)
-            )
-            radio.pack(side="left", padx=(0, 10))
-
-            icon_label = ctk.CTkLabel(
-                left_frame,
-                text=fmt["icon"],
-                font=ctk.CTkFont(size=24)
-            )
-            icon_label.pack(side="left", padx=(0, 10))
-
-            # 标题 + 扩展名
-            title_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
-            title_frame.pack(side="left")
-
-            title_text = fmt["title"] + ("  ✨推荐" if fmt["recommended"] else "")
-            title_label = ctk.CTkLabel(
-                title_frame,
-                text=title_text,
-                font=ctk.CTkFont(*AppFonts.BODY, weight="bold")
-            )
-            title_label.pack(anchor="w")
-
-            ext_label = ctk.CTkLabel(
-                title_frame,
-                text=fmt["extension"],
-                font=ctk.CTkFont(*AppFonts.CAPTION),
-                text_color=AppColors.TEXT_MUTED
-            )
-            ext_label.pack(anchor="w")
-
-            # 右侧：描述文本
-            desc_label = ctk.CTkLabel(
-                inner_frame,
-                text=fmt["description"],
-                font=ctk.CTkFont(*AppFonts.CAPTION),
-                text_color=AppColors.TEXT_SECONDARY,
-                wraplength=380,
-                justify="left"
-            )
-            desc_label.pack(side="right", anchor="e", padx=(10, 0))
+            card.pack(fill='x', pady=4)
+            self.format_cards[fmt['value']] = card
+            radio = ctk.CTkRadioButton(card, text=fmt['title'] + ' (' + fmt['extension'] + ')',
+                                       variable=self.export_format, value=fmt['value'], font=AppFonts.BODY,
+                                       command=lambda v=fmt['value']: self._on_format_selected(v))
+            radio.pack(anchor='w', padx=14, pady=(12, 4))
+            description = ctk.CTkLabel(card, text=fmt['description'], font=AppFonts.BODY_SMALL,
+                                        text_color=AppColors.TEXT_SECONDARY, wraplength=430,
+                                        justify='left', anchor='w')
+            description.pack(fill='x', padx=44, pady=(0, 12))
 
         # 初始化选中状态样式
         self._on_format_selected(self.export_format.get())
@@ -345,8 +306,14 @@ class ExportDialog:
         
     def _create_button_bar(self):
         """创建底部按钮栏"""
-        button_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        button_frame.pack(fill="x", pady=(15, 5))
+        button_frame = ctk.CTkFrame(self.window, fg_color='transparent')
+        button_frame.pack(side='bottom', fill='x', padx=20, pady=(4, 16))
+        self.path_preview = ctk.CTkLabel(button_frame, text='', wraplength=540, anchor='w',
+                                         justify='left', font=AppFonts.BODY_SMALL, text_color=AppColors.TEXT_SECONDARY)
+        self.path_preview.pack(fill='x', pady=(0, 8))
+        self.export_status = ctk.CTkLabel(button_frame, text='导出当前整理稿；原始会话仍保留。',
+                                          anchor='w', font=AppFonts.BODY_SMALL)
+        self.export_status.pack(fill='x', pady=(0, 8))
 
         # 取消按钮
         self.cancel_btn = ctk.CTkButton(
@@ -367,8 +334,8 @@ class ExportDialog:
             command=self._on_export,
             width=110,
             height=36,
-            fg_color=AppColors.SUCCESS,
-            hover_color=AppColors.SUCCESS_HOVER
+            fg_color=AppColors.PRIMARY,
+            hover_color=AppColors.PRIMARY_HOVER
         )
         self.export_btn.pack(side="right", padx=3)
 
@@ -379,7 +346,7 @@ class ExportDialog:
         Returns:
             保存的目录，如果没有则返回默认
         """
-        default_dir = "./output"
+        default_dir = str(settings.document.output_dir)
 
         if not self.CONFIG_FILE.exists():
             return default_dir
@@ -425,57 +392,88 @@ class ExportDialog:
             
     def _on_cancel(self):
         """取消按钮点击"""
+        if self.is_exporting:
+            self.export_status.configure(text='正在写入文档，请等待完成后关闭。')
+            return
+        self._closed = True
         self.window.destroy()
         
     def _on_export(self):
-        """导出按钮点击"""
-        # 获取配置
-        format_type = self.export_format.get()
-        output_dir = Path(self.output_dir.get())
-        
-        # 确保输出目录存在
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 生成文件名
-        filename = self._generate_filename()
-        
-        # 构建完整路径
-        file_path = output_dir / f"{filename}.{format_type}"
-        
-        # 检查文件是否已存在
-        if file_path.exists():
-            if not messagebox.askyesno(
-                "文件已存在",
-                f"文件 {file_path.name} 已存在，是否覆盖？"
-            ):
-                return
-                
-        # 执行导出
+        if self.is_exporting or self._closed:
+            return
         try:
-            # 执行导出，exporter 可能会调整扩展名（如 markdown -> .md）
-            final_path = self._do_export(file_path, format_type)
+            format_type = self.export_format.get()
+            file_path = self._export_path()
+            if file_path.exists() and not messagebox.askyesno(
+                    '文件已存在', f'文件 {file_path.name} 已存在，是否覆盖？', parent=self.window):
+                return
+        except Exception as error:
+            messagebox.showerror('导出配置无效', str(error), parent=self.window)
+            return
+        self._set_exporting(True)
+        self.export_status.configure(text='正在后台导出，请稍候…')
+        self.window.after(80, self._poll_export)
+        def export():
+            try:
+                path = self._do_export(file_path, format_type)
+                self._results.put((path, None))
+            except Exception as error:
+                self._results.put((None, str(error)))
+        threading.Thread(target=export, name='document-export', daemon=True).start()
 
-            # 调用回调
-            if self.on_export:
-                self.on_export(final_path)
+    def _export_path(self):
+        extensions = {'markdown': '.md', 'md': '.md', 'docx': '.docx', 'json': '.json'}
+        extension = extensions.get(self.export_format.get())
+        if extension is None:
+            raise ValueError('请选择支持的导出格式')
+        directory = self.output_dir.get().strip()
+        if not directory:
+            raise ValueError('请选择输出目录')
+        filename = self._generate_filename()
+        if filename.lower().endswith(extension):
+            filename = filename[:-len(extension)]
+        return Path(directory).expanduser() / f'{filename}{extension}'
 
-            # 显示成功消息
-            messagebox.showinfo(
-                "导出成功",
-                f"文档已导出到:\n{final_path}"
-            )
+    def _update_preview(self):
+        try:
+            text = f'将保存到：{self._export_path()}'
+        except ValueError as error:
+            text = str(error)
+        self.path_preview.configure(text=text)
 
-            # 记住这次的输出目录，下次默认使用
-            self._save_last_output_dir(self.output_dir.get())
+    def _set_exporting(self, exporting):
+        self.is_exporting = exporting
+        def update(parent):
+            for widget in parent.winfo_children():
+                if isinstance(widget, (ctk.CTkButton, ctk.CTkEntry, ctk.CTkOptionMenu, ctk.CTkRadioButton)):
+                    widget.configure(state='disabled' if exporting else 'normal')
+                else:
+                    update(widget)
+        update(self.window)
+        self.export_btn.configure(text='正在导出…' if exporting else '导出')
 
-            # 关闭对话框
-            self.window.destroy()
-
-        except Exception as e:
-            messagebox.showerror(
-                "导出失败",
-                f"导出文档时出错:\n{str(e)}"
-            )
+    def _poll_export(self):
+        if self._closed:
+            return
+        try:
+            path, error = self._results.get_nowait()
+        except Empty:
+            self.window.after(80, self._poll_export)
+            return
+        self._set_exporting(False)
+        if error:
+            self.export_status.configure(text='导出失败，可检查路径或关闭占用文件后重试。')
+            messagebox.showerror('导出失败', error, parent=self.window)
+            return
+        self._save_last_output_dir(str(path.parent))
+        if self.on_export:
+            try:
+                self.on_export(path)
+            except Exception:
+                logger.exception('文档已导出，但会话记录更新失败')
+                messagebox.showwarning('文档已导出', f'文件已保存到 {path}，但会话导出记录更新失败。', parent=self.window)
+        messagebox.showinfo('导出成功', f'文档已导出到：\n{path}', parent=self.window)
+        self._on_cancel()
             
     def _generate_filename(self) -> str:
         """
@@ -491,14 +489,14 @@ class ExportDialog:
             custom = self.custom_filename.get().strip()
             if custom:
                 return NamingStrategy._sanitize_filename(custom)
-            # 如果自定义为空，使用默认时间戳
-            template = "timestamp"
+            raise ValueError('请输入自定义文件名')
             
         # 使用命名策略生成文件名
         strategy = NamingStrategy(template=template)
         return strategy.generate(
             title=self.document.title or "未命名",
-            session_id=self.document.session_id
+            session_id=self.document.session_id,
+            timestamp=self._filename_time,
         )
         
     def _do_export(self, file_path: Path, format_type: str) -> Path:

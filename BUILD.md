@@ -25,14 +25,14 @@ pyinstaller app.spec
 打包完成后，可执行文件和依赖在 `dist/` 目录。
 
 #### 制作绿色压缩包
-打包完成后，将整个 `dist/` 文件夹压缩：
-```
+当前 `app.spec` 使用 one-file 模式，`dist/` 中只需分发主程序：
+
+```text
 dist/
-├── VoiceTranscription.exe      # 主程序
-└── 所有 PyInstaller 生成的 .dll 和支持文件
+└── VoiceTranscription.exe      # 单文件主程序，约 45MB
 ```
 
-压缩为 `VoiceTranscription-Windows.zip`，这就是绿色安装包。
+将 `VoiceTranscription.exe` 压缩为 `VoiceTranscription-Windows.zip`。**不要把本机 `dist/.env`、`sessions/`、`output/`、`logs/` 一起打包**，这些目录可能包含 API Key 或录音内容。
 
 ---
 
@@ -119,7 +119,8 @@ codesign --force --deep --sign "Apple Development: Your Name (XXXXXX)" dist/Voic
 ## 👤 macOS 用户端 - 绿色安装使用说明
 
 ### 系统要求
-- macOS 12.0 或更高版本（Intel / Apple Silicon 都支持）
+- macOS 12.0 或更高版本
+- 构建产物与构建机架构一致（Intel 或 Apple Silicon）；如架构不匹配，请在对应 Mac 上重新构建
 - 约 250MB 磁盘空间
 
 ### 安装步骤
@@ -127,7 +128,7 @@ codesign --force --deep --sign "Apple Development: Your Name (XXXXXX)" dist/Voic
 #### 方式一：解压即用（推荐，无签名绿色版）
 1. **下载压缩包** `VoiceTranscription-macOS.zip` 到电脑
 2. **双击解压**得到 `VoiceTranscription.app`
-3. 将应用拖到「应用程序」文件夹
+3. 建议将应用放到用户目录下的独立文件夹（如 `~/Applications/VoiceTranscription`）；程序会在 `.app` 同级生成 `.env`、`sessions`、`output`、`logs`
 4. **首次打开**：必须**右键点击图标** → 选择「打开」
    > ⚠️  因为是未签名应用，**不能直接双击打开**，否则 macOS 会提示"无法打开"。这是 macOS 安全机制，第一次右键打开后，以后就可以正常双击打开了。
 5. 首次启动会自动弹出 API Key 配置对话框，输入你的阿里云 DashScope API Key 即可使用
@@ -176,7 +177,7 @@ brew install portaudio
 
 **Q: Apple Silicon (M1/M2/M3) 能运行吗？**
 
-A: 可以。如果你在 Apple Silicon 机器上打包，生成的就是原生 Apple Silicon 版本。如果需要同时支持 Intel 和 Apple Silicon，可以使用 `pyinstaller --target-arch universal2` 打包通用二进制版本。
+A: 可以。在 Apple Silicon 机器上打包会生成原生 arm64 版本；在 Intel Mac 上打包会生成 x86_64 版本。`universal2` 需要 PyAudio、portaudio 及其他二进制同时提供 universal 架构，不能仅靠 `--target-arch universal2` 保证成功。CI 默认使用 `macos-latest` 的构建机架构，如需覆盖两类 Mac，请分别在对应架构上构建。
 
 ---
 
@@ -191,10 +192,10 @@ A: 可以。如果你在 Apple Silicon 机器上打包，生成的就是原生 A
 
 ### 体积参考
 
-| 平台 | 打包后大小（未压缩） | UPX压缩后 |
-|------|---------------------|-----------|
-| Windows | ~150-200 MB | ~80-120 MB |
-| macOS | ~200-280 MB | ~120-180 MB |
+| 平台 | 打包后大小（单文件） | 说明 |
+|------|---------------------|------|
+| Windows | 约 45 MB | 当前 `app.spec` one-file 构建，UPX 压缩后 |
+| macOS | 约 50-80 MB | 视运行器架构和依赖版本而定 |
 
 ### 测试打包结果
 

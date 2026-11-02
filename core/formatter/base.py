@@ -27,6 +27,7 @@ class TranscriptionSegment:
     end_time: float
     speaker_id: Optional[str] = None
     confidence: float = 1.0
+    timing_source: str = 'estimated'  # 句级估计，不代表字级强制对齐
 
 
 @dataclass
@@ -52,6 +53,12 @@ class FormattedDocument:
     # 内容
     raw_text: str = ""                          # 原始文本
     formatted_text: str = ""                    # 格式化后文本
+    analysis_text: str = ''                     # 行为引文对应的分析输入，独立于人工修订稿
+    analysis_fingerprint: str = ''              # 分析输入指纹，用于复用未变化的结果
+    analysis_model: str = ''                    # 生成该结果的模型名称
+    analysis_at: str = ''                       # 该结果的生成时间（ISO 格式）
+    draft_edited: bool = False                  # 区分主动清空的修订稿与尚未整理的旧会话
+    processing_warnings: List[str] = field(default_factory=list)
     segments: List[TranscriptionSegment] = field(default_factory=list)
 
     # 行为匹配（仅在behavior风格时使用）
@@ -73,6 +80,12 @@ class FormattedDocument:
             "language": self.language,
             "raw_text": self.raw_text,
             "formatted_text": self.formatted_text,
+            'analysis_text': self.analysis_text,
+            'analysis_fingerprint': self.analysis_fingerprint,
+            'analysis_model': self.analysis_model,
+            'analysis_at': self.analysis_at,
+            'draft_edited': self.draft_edited,
+            'processing_warnings': list(self.processing_warnings),
             "segments": [
                 {
                     "text": s.text,
@@ -80,6 +93,7 @@ class FormattedDocument:
                     "end_time": s.end_time,
                     "speaker_id": s.speaker_id,
                     "confidence": s.confidence,
+                    'timing_source': s.timing_source,
                 }
                 for s in self.segments
             ],

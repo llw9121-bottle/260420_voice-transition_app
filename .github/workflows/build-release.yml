@@ -41,17 +41,17 @@ jobs:
 
       - name: Zip output
         run: |
-          Compress-Archive -Path dist\* -DestinationPath VoiceTranscription-Windows.zip
+          Compress-Archive -Path dist\VoiceTranscription.exe -DestinationPath VoiceTranscription-Windows.zip
 
       - name: Upload artifact
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: VoiceTranscription-Windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
-    name: Build macOS (universal2)
+    name: Build macOS
     runs-on: macos-latest
     steps:
       - name: Checkout code
@@ -85,7 +85,7 @@ jobs:
           zip -r ../VoiceTranscription-macOS.zip VoiceTranscription.app
 
       - name: Upload artifact
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: VoiceTranscription-macOS.zip
         env:

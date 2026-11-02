@@ -24,12 +24,25 @@ class APISettingsDialog:
     自动保存到 .env 文件。
     """
 
+    REGION_CHOICES = [
+        'cn-beijing',
+        'ap-southeast-1',
+        'us-east-1',
+        'cn-hongkong',
+        'ap-northeast-1',
+        'eu-central-1',
+    ]
+
     def __init__(
         self,
         parent: ctk.CTk,
         on_save: Optional[Callable[[], None]] = None,
         initial_dashscope: str = "",
         initial_bailian: str = "",
+        initial_region: str = "cn-beijing",
+        initial_workspace: str = "",
+        initial_proxy_mode: str = "system",
+        initial_proxy_url: str = "",
         is_first_launch: bool = False
     ):
         """
@@ -40,6 +53,10 @@ class APISettingsDialog:
             on_save: 保存后的回调函数
             initial_dashscope: 初始 DashScope Key
             initial_bailian: 初始 Bailian Key
+            initial_region: 初始服务地域
+            initial_workspace: 初始业务空间 ID
+            initial_proxy_mode: 初始代理模式 system/direct/manual
+            initial_proxy_url: 初始手动代理地址
             is_first_launch: 是否是首次启动引导
         """
         self.parent = parent
@@ -49,8 +66,8 @@ class APISettingsDialog:
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
         self.window.title("配置 API Key")
-        self.window.geometry("680x540")
-        self.window.minsize(620, 480)
+        self.window.geometry("680x820")
+        self.window.minsize(620, 600)
 
         # 模态对话框
         self.window.transient(parent)
@@ -60,7 +77,10 @@ class APISettingsDialog:
         self._center_window()
 
         # 创建界面
-        self._create_ui(initial_dashscope, initial_bailian)
+        self._create_ui(
+            initial_dashscope, initial_bailian, initial_region, initial_workspace,
+            initial_proxy_mode, initial_proxy_url,
+        )
 
         logger.info("API 设置对话框已打开")
 
@@ -79,7 +99,9 @@ class APISettingsDialog:
         y = parent_y + (parent_height - height) // 2
         self.window.geometry(f"+{x}+{y}")
 
-    def _create_ui(self, initial_dashscope: str, initial_bailian: str):
+    def _create_ui(self, initial_dashscope: str, initial_bailian: str,
+                   initial_region: str, initial_workspace: str,
+                   initial_proxy_mode: str, initial_proxy_url: str):
         """创建用户界面"""
         # 使用可滚动框架，保证所有内容都能访问
         self.scroll_frame = ctk.CTkScrollableFrame(
@@ -132,6 +154,12 @@ class APISettingsDialog:
         # DashScope API Key 输入框
         self._create_dashscope_input(initial_dashscope)
 
+        # 地域和业务空间
+        self._create_endpoint_inputs(initial_region, initial_workspace)
+
+        # 代理设置
+        self._create_proxy_inputs(initial_proxy_mode, initial_proxy_url)
+
         # 分隔线
         separator = ctk.CTkFrame(self.main_frame, height=2, fg_color=AppColors.DIVIDER)
         separator.pack(fill="x", pady=10)
@@ -142,6 +170,8 @@ class APISettingsDialog:
         # 提示信息
         hint_text = """提示:
 • 如果 BAILIAN_API_KEY 留空，默认使用 DASHSCOPE_API_KEY
+• 业务空间 ID 留空时使用公共域名
+• 代理/VPN 未运行时，取消勾选“使用系统代理”
 • API Key 保存在项目根目录的 .env 文件中
 • 保存后需要重启应用才能生效"""
         self.hint_label = ctk.CTkLabel(
@@ -222,6 +252,94 @@ class APISettingsDialog:
         self.dashscope_entry.bind("<KeyRelease>", self._validate_dashscope_key)
         # 初始化校验
         self._validate_dashscope_key()
+
+    def _create_endpoint_inputs(self, initial_region: str, initial_workspace: str):
+        """创建地域和业务空间输入项（用于推导服务域名）"""
+        frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        frame.pack(fill="x", pady=5)
+
+        label = ctk.CTkLabel(
+            frame,
+            text="服务地域",
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
+        )
+        label.pack(anchor="w", padx=5, pady=(2, 5))
+
+        self.region_menu = ctk.CTkOptionMenu(
+            frame,
+            values=self.REGION_CHOICES,
+            height=36,
+            fg_color=AppColors.SECONDARY,
+            button_color=AppColors.BORDER,
+            button_hover_color=AppColors.PRIMARY,
+        )
+        region_value = initial_region if initial_region in self.REGION_CHOICES else self.REGION_CHOICES[0]
+        self.region_menu.set(region_value)
+        self.region_menu.pack(fill="x", padx=5, pady=(0, 8))
+
+        workspace_label = ctk.CTkLabel(
+            frame,
+            text="业务空间 ID（可选）",
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
+        )
+        workspace_label.pack(anchor="w", padx=5, pady=(2, 5))
+
+        self.workspace_entry = ctk.CTkEntry(
+            frame,
+            placeholder_text="llm-xxxxxxxxxxxx（留空使用公共域名）",
+            height=38
+        )
+        if initial_workspace:
+            self.workspace_entry.insert(0, initial_workspace)
+        self.workspace_entry.pack(fill="x", padx=5, pady=(0, 5))
+
+        endpoint_hint = ctk.CTkLabel(
+            frame,
+            text="填写业务空间 ID 后使用专属域名（更高吞吐与稳定性）；留空则使用公共域名。",
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=10),
+            text_color=AppColors.TEXT_SECONDARY,
+            justify="left"
+        )
+        endpoint_hint.pack(anchor="w", padx=5)
+
+    def _create_proxy_inputs(self, initial_mode: str, initial_url: str):
+        """创建代理设置项"""
+        frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        frame.pack(fill="x", pady=5)
+
+        label = ctk.CTkLabel(
+            frame,
+            text="代理设置",
+            font=ctk.CTkFont(*AppFonts.SUBTITLE)
+        )
+        label.pack(anchor="w", padx=5, pady=(2, 5))
+
+        self.use_proxy_var = ctk.BooleanVar(value=initial_mode != "direct")
+        self.proxy_check = ctk.CTkCheckBox(
+            frame,
+            text="使用系统代理 / VPN",
+            variable=self.use_proxy_var,
+            font=ctk.CTkFont(*AppFonts.CAPTION)
+        )
+        self.proxy_check.pack(anchor="w", padx=5)
+
+        self.proxy_entry = ctk.CTkEntry(
+            frame,
+            placeholder_text="手动代理地址，如 http://127.0.0.1:7890（留空使用系统代理）",
+            height=38
+        )
+        if initial_mode == "manual" and initial_url:
+            self.proxy_entry.insert(0, initial_url)
+        self.proxy_entry.pack(fill="x", padx=5, pady=(6, 5))
+
+        proxy_hint = ctk.CTkLabel(
+            frame,
+            text="代理/VPN 未运行时请取消勾选；填写地址则强制使用该代理。",
+            font=ctk.CTkFont(family=AppFonts.FAMILY, size=10),
+            text_color=AppColors.TEXT_SECONDARY,
+            justify="left"
+        )
+        proxy_hint.pack(anchor="w", padx=5)
 
     def _create_bailian_input(self, initial_value: str):
         """创建 Bailian API Key 输入框（带粘贴按钮）"""
@@ -378,7 +496,19 @@ class APISettingsDialog:
                 return
 
         # 保存配置
-        success = save_api_configuration(dashscope_key, bailian_key)
+        region = self.region_menu.get()
+        workspace_id = self.workspace_entry.get().strip()
+        proxy_url = self.proxy_entry.get().strip()
+        if not self.use_proxy_var.get():
+            proxy_mode = "direct"
+            proxy_url = ""
+        elif proxy_url:
+            proxy_mode = "manual"
+        else:
+            proxy_mode = "system"
+        success = save_api_configuration(
+            dashscope_key, bailian_key, region, workspace_id, proxy_mode, proxy_url
+        )
         if not success:
             messagebox.showerror(
                 "保存失败",

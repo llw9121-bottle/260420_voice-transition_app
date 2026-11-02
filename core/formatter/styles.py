@@ -4,13 +4,19 @@
 定义不同的格式化风格，每种风格对应特定的格式化逻辑。
 """
 
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from loguru import logger
 
+from config.settings import settings
 from core.formatter.base import FormattedDocument, FormattingStyle, StyleFormatter
 from core.formatter.text_cleaner import TextCleaner, split_into_paragraphs
-from core.formatter.behavior_matcher import BehaviorMatcher, BehaviorConfig
+from core.formatter.behavior_matcher import (
+    BehaviorMatcher, BehaviorConfig, compute_analysis_fingerprint,
+)
+from core.processing import ProcessingContext
+from utils.exceptions import ProcessingCancelled
 
 
 class RawStyle(StyleFormatter):
@@ -99,26 +105,32 @@ class ParagraphStyle(StyleFormatter):
 
     def format(self, document: FormattedDocument, **kwargs) -> FormattedDocument:
         """段落风格：按停顿分割成段落，可选LLM语义整理"""
+        context = kwargs.get('context') or ProcessingContext()
+        context.report('正在清理口语与分段')
         # 读取选项，允许kwargs覆盖
         enable_llm = kwargs.get(
             "enable_llm_reorganization",
             self.enable_llm_reorganization
         )
 
-        # 先清洗文本
+        # 清洗是分段和 LLM 分析的共同前置步骤。
         cleaner = TextCleaner()
         cleaned_text = cleaner.clean(document.raw_text)
 
-        # 处理流程
         if enable_llm and cleaned_text.strip():
             from api.bailian_llm import reorganize_paragraphs
             try:
                 logger.info("开始LLM语义段落整理...")
-                processed_text = reorganize_paragraphs(cleaned_text, language=document.language)
+                context.report('正在调用 AI 语义分段')
+                processed_text = reorganize_paragraphs(cleaned_text, language=document.language, context=context)
+                context.check()
                 logger.info("LLM段落整理完成")
                 document.formatted_text = processed_text
+            except ProcessingCancelled:
+                raise
             except Exception as e:
                 logger.warning(f"LLM段落整理失败，回退到基于时间戳分割: {e}")
+                document.processing_warnings.append(f'AI 语义分段失败，本次使用本地分段：{e}；可稍后重新整理。')
                 # 回退到原始基于时间戳的方法
                 paragraphs = split_into_paragraphs(
                     cleaned_text,
@@ -184,6 +196,9 @@ class BehaviorMatchStyle(StyleFormatter):
                 auto_chunk_long_text if auto_chunk_long_text is not None else True
             )
         self._matcher: Optional[BehaviorMatcher] = None
+        self._reused = False
+        self._analysis_model = ''
+        self._analysis_at_display = ''
 
     @property
     def style(self) -> FormattingStyle:
@@ -198,7 +213,12 @@ class BehaviorMatchStyle(StyleFormatter):
         2. （可选）LLM段落整理，按语义重新分段
         3. 行为匹配，对整理后的文本识别关键行为
         """
+        self._reused = False
+        self._analysis_model = ''
+        self._analysis_at_display = ''
         # 获取配置
+        context = kwargs.get('context') or ProcessingContext()
+        context.report('正在清理口语')
         config = self.behavior_config
         if not config:
             config = kwargs.get("behavior_config")
@@ -213,27 +233,34 @@ class BehaviorMatchStyle(StyleFormatter):
             self.auto_chunk_long_text
         )
 
-        # 即使配置为空或没有行为，也保持行为匹配风格
-        # 步骤1: 清洗文本
+        # 即使没有行为定义，也保留行为匹配风格和清洗结果。
         cleaner = TextCleaner()
         cleaned_text = cleaner.clean(document.raw_text)
 
-        # 步骤2: （可选）LLM段落整理
+        # 可选语义分段；失败时回退到清洗文本。
         from api.bailian_llm import reorganize_paragraphs
         processed_text = cleaned_text
         doc_language = document.language
+        segmentation_ok = True
 
         if enable_para_reorg and config and config.behaviors:
             try:
                 logger.info("开始LLM段落整理...")
-                processed_text = reorganize_paragraphs(cleaned_text, language=doc_language)
+                context.report('正在调用 AI 语义分段')
+                processed_text = reorganize_paragraphs(cleaned_text, language=doc_language, context=context)
+                context.check()
                 logger.info("LLM段落整理完成")
+            except ProcessingCancelled:
+                raise
             except Exception as e:
                 logger.warning(f"LLM段落整理失败，使用清洗后原始文本: {e}")
+                document.processing_warnings.append(f'AI 语义分段失败，行为分析使用清洗后的文本：{e}')
                 processed_text = cleaned_text
+                segmentation_ok = False
 
-        # 步骤3: 如果有配置且有行为定义，执行行为匹配
+        # 行为匹配
         matches = []
+        stats = {}
         if config and config.behaviors:
             try:
                 # 创建匹配器
@@ -245,15 +272,84 @@ class BehaviorMatchStyle(StyleFormatter):
                     )
 
                 # 执行行为匹配
-                matches = self._matcher.match(processed_text)
+                matches = self._matcher.match(processed_text, context=context)
+                context.check()
+                stats = getattr(self._matcher, 'last_stats', {})
+                for warning in getattr(self._matcher, 'last_warnings', []):
+                    if warning not in document.processing_warnings:
+                        document.processing_warnings.append(warning)
+                if stats.get('skipped_unlocatable'):
+                    message = (
+                        f"模型返回 {stats.get('returned', 0)} 条结果，"
+                        f"其中 {stats['skipped_unlocatable']} 条引文无法定位，已跳过。"
+                    )
+                    if message not in document.processing_warnings:
+                        document.processing_warnings.append(message)
+                if stats.get('skipped_invalid'):
+                    message = (
+                        f"模型返回 {stats.get('returned', 0)} 条结果，"
+                        f"其中 {stats['skipped_invalid']} 条字段或行为名无效，已跳过。"
+                    )
+                    if message not in document.processing_warnings:
+                        document.processing_warnings.append(message)
+                if stats.get('skipped_definition_examples'):
+                    message = (
+                        f"模型把 {stats['skipped_definition_examples']} 条行为定义示例当成了原文，"
+                        "已忽略；其他匹配结果不受影响。"
+                    )
+                    if message not in document.processing_warnings:
+                        document.processing_warnings.append(message)
+            except ProcessingCancelled:
+                raise
             except Exception as e:
                 logger.warning(f"行为匹配执行失败，使用处理后的原始文本: {e}")
+                document.processing_warnings.append(f'行为分析未完成；当前没有可用分析结果，请重试：{e}')
                 matches = []
+                stats = {'failed_chunks': 1, 'chunks': 1}
+        elif not config or not config.behaviors:
+            document.processing_warnings.append('尚未配置行为定义，本次仅清理文本，未执行行为分析。')
+
+        # 记录分析元数据；只有完整成功的结果才允许后续复用。
+        candidate_model = getattr(getattr(self._matcher, 'llm', None), 'model', '')
+        matcher_model = (
+            candidate_model
+            if isinstance(candidate_model, str) and candidate_model
+            else settings.api.bailian_model
+        )
+        analysis_time = datetime.now()
+        self._analysis_model = matcher_model
+        self._analysis_at_display = analysis_time.strftime('%Y-%m-%d %H:%M')
+        cacheable = (
+            bool(config and config.behaviors)
+            and segmentation_ok
+            and not stats.get('failed_chunks')
+            and not stats.get('skipped_unlocatable')
+        )
+        if cacheable:
+            document.analysis_fingerprint = compute_analysis_fingerprint(
+                document.raw_text,
+                config,
+                matcher_model,
+                doc_language,
+                enable_para_reorg,
+                auto_chunk,
+            )
+            document.analysis_model = matcher_model
+            document.analysis_at = analysis_time.isoformat(timespec='seconds')
+        else:
+            document.analysis_fingerprint = ''
+            document.analysis_model = ''
+            document.analysis_at = ''
 
         # 生成带标记的文本（即使没有匹配也保持风格）
-        formatted_text = self._format_with_matches(processed_text, matches)
+        context.report('正在生成整理稿与分析依据')
+        if not matches and stats.get('failed_chunks'):
+            formatted_text = processed_text + "\n\n---\n*行为分析未完成：部分或全部分块失败，请重试*"
+        else:
+            formatted_text = self._format_with_matches(processed_text, matches)
 
         document.formatted_text = formatted_text
+        document.analysis_text = processed_text
         document.style = self.style
         document.behavior_matches = matches
         if config and config.behaviors:
@@ -261,54 +357,101 @@ class BehaviorMatchStyle(StyleFormatter):
         document.word_count = len(document.formatted_text)
 
         return document
-    
+
+    def render_reused(self, document: FormattedDocument) -> FormattedDocument:
+        """复用已有分析结果重新渲染，不调用任何远程模型。
+
+        仅在原文、行为配置、模型和提示词版本均未变化时使用；调用方负责校验指纹。
+        """
+        if not document.analysis_text:
+            raise ValueError('没有可复用的分析结果')
+
+        self._reused = True
+        self._analysis_model = document.analysis_model or settings.api.bailian_model
+        self._analysis_at_display = (
+            document.analysis_at.replace('T', ' ')[:16] if document.analysis_at else ''
+        )
+        document.formatted_text = self._format_with_matches(
+            document.analysis_text, document.behavior_matches
+        )
+        document.style = self.style
+        document.word_count = len(document.formatted_text)
+        return document
+
+    @staticmethod
+    def _safe_marker(value: str) -> str:
+        """避免行为名破坏正文标记。"""
+        return (
+            str(value)
+            .replace('【', '〔')
+            .replace('】', '〕')
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+        )
+
+    @staticmethod
+    def _safe_markdown(value: str) -> str:
+        """避免行为名破坏 Markdown 表格。"""
+        return (
+            str(value)
+            .replace('\\', '\\\\')
+            .replace('|', '\\|')
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+        )
+
     def _format_with_matches(self, text: str, matches: List[Any]) -> str:
-        """将匹配结果格式化为带标记的文本"""
+        """将匹配结果格式化为带标记的文本；重叠区间合并，避免正文重复。"""
         if not matches:
-            # 没有匹配到任何行为，添加友好提示
+            # 有文本且已配置行为，但没有可定位的匹配
             if text.strip() and self.behavior_config and self.behavior_config.behaviors:
-                # 有文本且已配置行为，但没有匹配到
-                text = text + "\n\n---\n*未识别到符合定义的关键行为*"
+                if self._reused:
+                    note = '未识别到可定位的关键行为（复用上次分析结果）。如需新的独立结果，请点击“重新分析”。'
+                else:
+                    note = '未识别到可定位的关键行为。LLM 判定具有随机性，可点击“重新分析”获取新的独立结果。'
+                text = text + f"\n\n---\n*{note}*"
             return text
 
-        # 按位置排序
-        sorted_matches = sorted(matches, key=lambda m: m.context_start)
+        sorted_matches = sorted(matches, key=lambda m: (m.context_start, m.context_end))
+        clusters = []
+        for match in sorted_matches:
+            start = max(0, min(match.context_start, len(text)))
+            end = max(start, min(match.context_end, len(text)))
+            if end <= start:
+                continue
+            if clusters and start <= clusters[-1]['end']:
+                clusters[-1]['end'] = max(clusters[-1]['end'], end)
+                clusters[-1]['matches'].append(match)
+            else:
+                clusters.append({'start': start, 'end': end, 'matches': [match]})
 
         result = []
         last_end = 0
+        for cluster in clusters:
+            if cluster['start'] > last_end:
+                result.append(text[last_end:cluster['start']])
+            markers = ' + '.join(
+                f"{self._safe_marker(item.behavior_name)}({item.confidence:.0%})"
+                for item in cluster['matches']
+            )
+            result.append(f"【{markers}】{text[cluster['start']:cluster['end']]}")
+            last_end = cluster['end']
 
-        for match in sorted_matches:
-            # 添加匹配前的文本
-            if match.context_start > last_end:
-                result.append(text[last_end:match.context_start])
-
-            # 添加上下文和标记
-            context_end = min(match.context_end, len(text))
-            matched_text = text[match.context_start:context_end]
-
-            # 格式化标记
-            marked = f"【{match.behavior_name}({match.confidence:.0%})】{matched_text}"
-            result.append(marked)
-
-            last_end = context_end
-
-        # 添加剩余文本
         if last_end < len(text):
             result.append(text[last_end:])
 
-        # 添加行为频率统计汇总
-        if matches:
-            stats_text = self._generate_statistics(matches)
-            result.append('\n\n' + stats_text)
-
+        result.append('\n\n' + self._generate_statistics(matches))
         return ''.join(result)
 
     def _generate_statistics(self, matches: List[Any]) -> str:
         """生成行为频率统计汇总
 
         按行为名称分组，统计总次数和不同置信度区间的分布。
-        置信度分类：高 (>= 0.8)、中 (0.6-0.8)、低 (< 0.6)
+        频次为模型识别且可定位的不同引文数量，不是绝对行为次数。
         """
+        min_confidence = getattr(self.behavior_config, 'min_confidence', 0.6)
+        medium_threshold = min(max(min_confidence, 0.0), 0.8)
+
         # 按行为名称分组统计
         stats = {}
         for match in matches:
@@ -320,7 +463,7 @@ class BehaviorMatchStyle(StyleFormatter):
             conf = match.confidence
             if conf >= 0.8:
                 stats[name]['high'] += 1
-            elif conf >= 0.6:
+            elif conf >= medium_threshold:
                 stats[name]['medium'] += 1
             else:
                 stats[name]['low'] += 1
@@ -334,12 +477,16 @@ class BehaviorMatchStyle(StyleFormatter):
 
         # 生成汇总文本
         lines = ['---', '**行为频率统计**', '']
-        lines.append('| 行为名称 | 总计 | 高置信度(≥0.8) | 中置信度(0.6-0.8) | 低置信度(<0.6) |')
+        lines.append(
+            f'| 行为名称 | 总计 | 高置信度(≥0.8) | '
+            f'中置信度(≥{medium_threshold:.0%}) | 低置信度(<{min_confidence:.0%}) |'
+        )
         lines.append('|---------|-----:|---------------:|-----------------:|--------------:|')
 
         for name, count in sorted_stats:
             lines.append(
-                f'| {name} | {count["total"]} | {count["high"]} | {count["medium"]} | {count["low"]} |'
+                f'| {self._safe_markdown(name)} | {count["total"]} | '
+                f'{count["high"]} | {count["medium"]} | {count["low"]} |'
             )
 
         total_all = sum(c['total'] for _, c in sorted_stats)
@@ -347,6 +494,24 @@ class BehaviorMatchStyle(StyleFormatter):
         medium_all = sum(c['medium'] for _, c in sorted_stats)
         low_all = sum(c['low'] for _, c in sorted_stats)
         lines.append(f'| **合计** | **{total_all}** | **{high_all}** | **{medium_all}** | **{low_all}** |')
+        lines.append('')
+        lines.append(
+            f'*注：频次为模型识别且可在原文中定位的不同引文数量，非绝对行为次数；'
+            f'置信度低于 {min_confidence:.0%} 的结果已过滤。*'
+        )
+
+        meta = []
+        if self._analysis_model:
+            meta.append(f'分析模型：{self._safe_markdown(self._analysis_model)}')
+        if self._analysis_at_display:
+            meta.append(f'分析时间：{self._analysis_at_display}')
+        if meta:
+            lines.append('')
+            lines.append(f"*{' · '.join(meta)}。*")
+        lines.append('')
+        lines.append('*LLM 判定具有随机性，同一文本重复分析可能得到不同结果；建议结合原文复核。*')
+        if self._reused:
+            lines.append('*本结果复用上次分析；如需新的独立结果，请点击“重新分析”。*')
 
         return '\n'.join(lines)
 

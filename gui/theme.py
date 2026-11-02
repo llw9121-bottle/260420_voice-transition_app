@@ -33,17 +33,18 @@ class AppColors:
     ACCENT_HOVER = ('#6D28D9', '#7C3AED')
 
     # Surfaces (background layers)
-    SURFACE = ('gray90', 'gray17')
-    SURFACE_RAISED = ('gray95', 'gray20')
+    BACKGROUND = ('#F3F5F9', '#111827')
+    SURFACE = ('#E9EEF5', '#1B2738')
+    SURFACE_RAISED = ('#FFFFFF', '#202D40')
 
     # Text
-    TEXT_PRIMARY = ('gray10', 'gray95')
-    TEXT_SECONDARY = ('gray50', 'gray60')
-    TEXT_MUTED = ('gray60', 'gray50')
+    TEXT_PRIMARY = ('#1F2937', '#F1F5F9')
+    TEXT_SECONDARY = ('#526173', '#B4C1D2')
+    TEXT_MUTED = ('#66768A', '#94A3B8')
 
     # Borders & dividers
-    BORDER = ('gray75', 'gray30')
-    DIVIDER = ('gray80', 'gray25')
+    BORDER = ('#CBD5E1', '#43536B')
+    DIVIDER = ('#DFE5ED', '#334155')
 
     # Special
     RECORDING_INDICATOR_OFF = ('gray50', 'gray50')
@@ -56,8 +57,8 @@ class AppColors:
 def _get_platform_font() -> str:
     """Get the best default font family for current platform."""
     if sys.platform == 'win32':
-        # Windows 11: prefer Segoe UI Variable, fallback to Microsoft YaHei
-        return 'Segoe UI Variable'
+        # 中文界面优先使用系统无衬线字体，避免回退为宋体。
+        return 'Microsoft YaHei UI'
     elif sys.platform == 'darwin':
         return '.AppleSystemUIFont'
     else:
@@ -70,11 +71,11 @@ class AppFonts:
 
     Follows a consistent 4px base scale:
     - caption: 10px - helper text, hints
-    - body_small: 11px - secondary labels
-    - body: 12px - body text, buttons
+    - body_small: 12px - secondary labels
+    - body: 13px - body text, buttons
     - subtitle: 13px - card titles, section headers
-    - title: 14px - panel titles
-    - heading: 18px - app title
+    - title: 15px - panel titles
+    - heading: 21px - app title
     - monospace: 12px - numeric displays, timestamps
     """
 
@@ -84,14 +85,14 @@ class AppFonts:
 
     # Typography scale
     CAPTION = (FAMILY, 10)
-    BODY_SMALL = (FAMILY, 11)
-    BODY = (FAMILY, 12)
+    BODY_SMALL = (FAMILY, 12)
+    BODY = (FAMILY, 13)
     SUBTITLE = (FAMILY, 13, 'bold')
-    TITLE = (FAMILY, 14, 'bold')
-    HEADING = (FAMILY, 18, 'bold')
+    TITLE = (FAMILY, 15, 'bold')
+    HEADING = (FAMILY, 21, 'bold')
 
     # Specialized
-    BUTTON = (FAMILY, 12)
+    BUTTON = (FAMILY, 13)
     MONO_NUMBERS = (MONOSPACE, 12)
     TRANSCRIPTION_BODY = (FAMILY, 16)  # Base transcription text size
 

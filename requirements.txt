@@ -16,8 +16,12 @@ numpy>=1.26.0
 customtkinter>=5.2.0
 
 # DashScope AI Services
-dashscope>=1.25.6
-websocket-client>=1.6
+# 2.0.3 已通过真实会话验证；限制大版本避免再次出现 breaking change
+dashscope>=2.0.3,<3.0.0
+websocket-client>=1.6,<2.0
+
+# HTTP client (direct import in api/bailian_llm.py)
+requests>=2.31.0
 
 # Document export
 python-docx>=1.1.0

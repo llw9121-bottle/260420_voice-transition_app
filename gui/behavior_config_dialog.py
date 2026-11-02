@@ -225,7 +225,7 @@ class BehaviorConfigDialog:
         # 自动分块复选框
         self.auto_chunk_check = ctk.CTkCheckBox(
             self.options_frame,
-            text="自动分块处理超长文本（超过 3万字 自动分割，避免上下文溢出）",
+            text="自动分块处理超长文本（约 6000 字以上自动分割，避免上下文溢出）",
             variable=self.auto_chunk_long_text
         )
         self.auto_chunk_check.pack(anchor="w", padx=10, pady=(2, 5))
@@ -518,10 +518,10 @@ class BehaviorConfigDialog:
                 bad_items.append(f"第{i+1}项: {name}")
 
             # 分割示例 - 支持多种分隔方式：换行、英文分号、中文分号
-            # 先按换行分割，如果只有一行再尝试按分号分割
+            # 示例支持换行或分号分隔。
             lines = [ex.strip() for ex in examples_text.splitlines() if ex.strip()]
             if len(lines) == 1 and lines[0]:
-                # 如果只有一行，尝试按分号分割
+                # 单行示例按分号拆分。
                 examples = [ex.strip() for ex in re.split(r'[;；]', lines[0]) if ex.strip()]
             else:
                 examples = lines
@@ -728,7 +728,7 @@ class BehaviorConfigDialog:
             # 分割示例 - 支持多种分隔方式：换行、英文分号、中文分号
             lines = [ex.strip() for ex in examples_text.splitlines() if ex.strip()]
             if len(lines) == 1 and lines[0]:
-                # 如果只有一行，尝试按分号分割
+                # 单行示例按分号拆分。
                 examples = [ex.strip() for ex in re.split(r'[;；]', lines[0]) if ex.strip()]
             else:
                 examples = lines

@@ -16,6 +16,12 @@ pip install pytest
 pytest tests/ -v
 ```
 
+仅运行离线单元测试（不采集麦克风，不调用真实 API）：
+
+```bash
+python -m pytest tests/ --ignore=tests/e2e -v -m "not requires_api"
+```
+
 ### 运行单个测试文件
 
 ```bash
@@ -37,6 +43,29 @@ pytest tests/ -v -s
 | `test_config.py` | 配置模块加载和验证 | 否 | 否 |
 | `test_audio_device.py` | 音频设备信息解析和配置 | 否 | 否（使用mock） |
 | `test_formatter.py` | 文本格式化和命名策略 | 否 | 否 |
+| `test_session_store.py` | 原子保存、写入失败保护、完整会话恢复 | 否 | 否 |
+| `test_recording_pipeline.py` | 有界缓冲、音频落盘、网络阻塞、停止收尾与重连取消 | 否 | 否（使用 mock） |
+| `test_app_lifecycle.py` | 后台启停、保存顺序、暂停自动保存、退出失败保护与界面状态 | 否 | 否（无窗口） |
+| `test_review.py` | 修订版本上限、原文映射、差异范围、空稿导出 | 否 | 否 |
+| `test_audio_player.py` | 流式回放、定位、取消隔离、设备异常与资源释放 | 否 | 否（使用 mock） |
+| `test_review_workspace.py` | 原生编辑、撤销、搜索、对照、窄屏布局与历史界面 | 否 | 否（需可用 Tk） |
+| `test_export_workflow.py` | 后台导出、覆盖检查、原子替换失败、保留文件名与整理说明导出 | 否 | 否 |
+| `test_processing.py` | 分块进度与取消、降级提示、响应校验、长文引文偏移 | 否 | 否（使用 mock） |
+
+第二轮回归还覆盖草稿保存后切换会话、导出前收集编辑、重整版本保留、过期结果隔离、句级估计时间及旧快照兼容。
+
+第三轮回归覆盖取消后丢弃远程结果、防止重复整理、慢磁盘合并自动保存、导出期间退出保护，以及原生导出窗口和阶段反馈。所有 AI 调用、录音和播放设备均使用替身；原生窗口测试只写测试目录。
+
+完整离线检查使用 `pytest tests/ --ignore=tests/e2e -m "not requires_api"`，避免旧的未标记端到端脚本访问真实 API 或声卡。
+
+原生窗口测试默认跳过。在安装完整 Tk 的 Python 环境中，使用 PowerShell 显式运行：
+
+```powershell
+$env:RUN_GUI_TESTS = '1'
+pytest tests/test_review_workspace.py -v
+```
+
+原生测试会打开测试窗口，使用示例数据，不修改用户偏好、不刷新真实音频设备，也不调用网络服务。Tcl/Tk 的脚本和二进制版本必须匹配。
 
 ## 添加新测试
 

@@ -5,6 +5,8 @@
 """
 
 import json
+import os
+import tempfile
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -24,8 +26,31 @@ class BaseExporter(ABC):
         """文件扩展名"""
         pass
     
-    @abstractmethod
     def export(self, document: FormattedDocument, output_path: Path) -> Path:
+        """先写同目录临时文件，再替换目标，失败时保留已有导出。"""
+        output_path = self._ensure_extension(Path(output_path))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=output_path.parent, prefix='.export-',
+                                             suffix=self.file_extension, delete=False) as handle:
+                temporary = Path(handle.name)
+            self._write(document, temporary)
+            with temporary.open('r+b') as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, output_path)
+            logger.info(f'文档已导出: {output_path}')
+            return output_path
+        finally:
+            if temporary and temporary.exists():
+                try:
+                    temporary.unlink()
+                except OSError:
+                    logger.warning(f'无法清理导出临时文件: {temporary.name}')
+
+    @abstractmethod
+    def _write(self, document: FormattedDocument, output_path: Path) -> Path:
         """
         导出文档
         
@@ -52,7 +77,7 @@ class JSONExporter(BaseExporter):
     def file_extension(self) -> str:
         return ".json"
     
-    def export(self, document: FormattedDocument, output_path: Path) -> Path:
+    def _write(self, document: FormattedDocument, output_path: Path) -> Path:
         output_path = self._ensure_extension(output_path)
         
         # 确保输出目录存在
@@ -65,7 +90,6 @@ class JSONExporter(BaseExporter):
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"JSON文档已导出: {output_path}")
         return output_path
 
 
@@ -76,7 +100,7 @@ class MarkdownExporter(BaseExporter):
     def file_extension(self) -> str:
         return ".md"
     
-    def export(self, document: FormattedDocument, output_path: Path) -> Path:
+    def _write(self, document: FormattedDocument, output_path: Path) -> Path:
         output_path = self._ensure_extension(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -94,12 +118,16 @@ class MarkdownExporter(BaseExporter):
             lines.append(f"**会话ID**: {document.session_id}")
         lines.append(f"**格式化风格**: {document.style.value}")
         lines.append("")
+        if document.processing_warnings:
+            lines.append('## 整理说明')
+            lines.extend(f'- {warning}' for warning in document.processing_warnings)
+            lines.append('')
         
         # 正文
         lines.append("## 正文")
         lines.append("")
         
-        if document.formatted_text:
+        if document.formatted_text or document.draft_edited:
             # 处理带标记的文本，将标记转换为高亮格式
             formatted = self._format_behavior_marks(document.formatted_text)
             lines.append(formatted)
@@ -134,7 +162,6 @@ class MarkdownExporter(BaseExporter):
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        logger.info(f"Markdown文档已导出: {output_path}")
         return output_path
     
     def _format_behavior_marks(self, text: str) -> str:
@@ -159,7 +186,7 @@ class WordExporter(BaseExporter):
     def file_extension(self) -> str:
         return ".docx"
     
-    def export(self, document: FormattedDocument, output_path: Path) -> Path:
+    def _write(self, document: FormattedDocument, output_path: Path) -> Path:
         output_path = self._ensure_extension(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -207,12 +234,16 @@ class WordExporter(BaseExporter):
             row.cells[1].text = value
         
         doc.add_paragraph()  # 空行
+        if document.processing_warnings:
+            doc.add_heading('整理说明', level=2)
+            for warning in document.processing_warnings:
+                doc.add_paragraph(warning, style='List Bullet')
         
         # 正文标题
         doc.add_heading('正文', level=2)
         
         # 正文内容（处理行为标记）
-        if document.formatted_text:
+        if document.formatted_text or document.draft_edited:
             self._add_formatted_content(doc, document.formatted_text)
         else:
             doc.add_paragraph(document.raw_text)
@@ -246,7 +277,6 @@ class WordExporter(BaseExporter):
         
         # 保存文档
         doc.save(str(output_path))
-        logger.info(f"Word文档已导出: {output_path}")
         
         return output_path
     

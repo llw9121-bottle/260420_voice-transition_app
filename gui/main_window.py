@@ -6,6 +6,7 @@
 
 import json
 import sys
+import tkinter as tk
 import customtkinter as ctk
 from pathlib import Path
 from typing import Optional, Callable
@@ -14,6 +15,8 @@ from config.settings import settings, project_root
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.behavior_matcher import BehaviorConfig
 from gui.theme import AppColors, AppFonts
+from core.recording_state import RecordingState
+from gui.review_workspace import ReviewWorkspace
 from utils.logger import logger
 
 
@@ -24,6 +27,10 @@ class MainWindow:
     创建和管理应用程序的主界面。
     """
     
+    STYLE_LABELS = {'原始转录': 'raw', '清理口语': 'cleaned', '段落整理': 'paragraphs', '行为分析': 'behavior_match'}
+    STYLE_HINTS = {'raw': '保留转录原文，不调用 AI。', 'cleaned': '轻量清理口语，原文始终保留。',
+                   'paragraphs': '按停顿分段；可选择 AI 语义分段。', 'behavior_match': '依据行为定义分析引文，会调用 AI。'}
+
     def __init__(self):
         """初始化主窗口"""
         # 配置文件路径（存储用户偏好）
@@ -37,12 +44,14 @@ class MainWindow:
         # 设置 CustomTkinter 外观
         ctk.set_appearance_mode(saved_theme)
         ctk.set_default_color_theme("blue")  # blue, green, dark-blue
+        ctk.ThemeManager.theme['CTkFont']['family'] = AppFonts.FAMILY
 
         # 创建主窗口（必须先创建 root 才能创建 StringVar）
         self.root = ctk.CTk()
+        self.root.configure(fg_color=AppColors.BACKGROUND)
         self.root.title("语音实时转录系统")
-        self.root.geometry("1200x800")
-        self.root.minsize(800, 600)
+        self.root.geometry("1280x840")
+        self.root.minsize(840, 640)
 
         # 创建主题变量（必须在 root 创建之后）
         self.appearance_mode = ctk.StringVar(value=saved_theme)
@@ -71,6 +80,7 @@ class MainWindow:
 
         # 绑定键盘快捷键
         self._bind_shortcuts()
+        self.set_recording_state(RecordingState.READY)
 
         # 启动后延迟刷新设备列表，避免卡顿
         self.root.after(100, self._refresh_devices)
@@ -82,7 +92,7 @@ class MainWindow:
         self.root.grid_rowconfigure(0, weight=1)
         
         # 主框架
-        self.main_frame = ctk.CTkFrame(self.root)
+        self.main_frame = ctk.CTkFrame(self.root, fg_color='transparent')
         self.main_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
@@ -97,268 +107,70 @@ class MainWindow:
         self._create_status_bar()
         
     def _create_control_bar(self):
-        """创建顶部控制栏"""
-        self.control_frame = ctk.CTkFrame(self.main_frame)
-        self.control_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
-        
-        # 标题区域（标题+提示）
-        title_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        title_frame.pack(side="left", padx=10, pady=10)
+        self.control_frame = ctk.CTkFrame(self.main_frame, fg_color='transparent')
+        self.control_frame.grid(row=0, column=0, padx=16, pady=(16, 12), sticky='ew')
+        self.control_frame.grid_columnconfigure(0, weight=1)
+        title = ctk.CTkFrame(self.control_frame, fg_color='transparent')
+        title.grid(row=0, column=0, sticky='ew', pady=(0, 14))
+        self.title_label = ctk.CTkLabel(title, text='语音工作台', font=AppFonts.HEADING)
+        self.title_label.pack(side='left')
+        self.help_btn = ctk.CTkButton(title, text='帮助', command=self._show_help, width=60, fg_color='transparent', text_color=AppColors.TEXT_PRIMARY, hover_color=AppColors.SURFACE)
+        self.help_btn.pack(side='right', padx=(8, 0))
+        self.settings_btn = ctk.CTkButton(title, text='设置', command=self._show_settings, width=60, fg_color='transparent', text_color=AppColors.TEXT_PRIMARY, hover_color=AppColors.SURFACE)
+        self.settings_btn.pack(side='right', padx=(8, 0))
+        self.history_btn = ctk.CTkButton(title, text='会话历史', command=lambda: self.workspace._call('history'), width=88, fg_color='transparent', text_color=AppColors.TEXT_PRIMARY, hover_color=AppColors.SURFACE)
+        self.history_btn.pack(side='right')
+        self.button_frame = ctk.CTkFrame(self.control_frame, fg_color='transparent')
+        self.button_frame.grid(row=1, column=0, sticky='ew')
+        self.start_btn = ctk.CTkButton(self.button_frame, text='开始录音', command=self._on_start_click, width=112, height=38, fg_color=AppColors.PRIMARY, hover_color=AppColors.PRIMARY_HOVER)
+        self.start_btn.pack(side='left', padx=(0, 8))
+        self.pause_btn = ctk.CTkButton(self.button_frame, text='暂停', command=self._on_pause_click, width=80, height=38, fg_color='transparent', border_width=1, border_color=AppColors.BORDER, text_color=AppColors.TEXT_PRIMARY, hover_color=AppColors.SURFACE)
+        self.pause_btn.pack(side='left', padx=(0, 8))
+        self.stop_btn = ctk.CTkButton(self.button_frame, text='结束录音', command=self._on_stop_click, width=92, height=38, fg_color='transparent', border_width=1, border_color=AppColors.BORDER, text_color=AppColors.DANGER, hover_color=AppColors.SURFACE)
+        self.stop_btn.pack(side='left', padx=(0, 8))
+        self.export_btn = ctk.CTkButton(self.button_frame, text='导出文稿', command=self._on_export_click, width=92, height=38, fg_color='transparent', border_width=1, border_color=AppColors.BORDER, text_color=AppColors.TEXT_PRIMARY, hover_color=AppColors.SURFACE)
+        self.export_btn.pack(side='right')
+        self.help_hint_label = ctk.CTkLabel(self.button_frame, text='空格 开始 / 暂停 · Esc 结束', font=AppFonts.BODY_SMALL, text_color=AppColors.TEXT_SECONDARY)
+        self.help_hint_label.pack(side='left', padx=12)
 
-        # 主标题
-        self.title_label = ctk.CTkLabel(
-            title_frame,
-            text="语音实时转录系统",
-            font=ctk.CTkFont(*AppFonts.HEADING)
-        )
-        self.title_label.pack(side="top", anchor="w")
-
-        # 帮助提示
-        self.help_hint_label = ctk.CTkLabel(
-            title_frame,
-            text="点击「帮助」查看使用说明 | 快捷键: 空格=开始/暂停, Esc=停止",
-            font=ctk.CTkFont(*AppFonts.CAPTION),
-            text_color=AppColors.TEXT_MUTED
-        )
-        self.help_hint_label.pack(side="top", anchor="w")
-
-        # 按钮框架
-        self.button_frame = ctk.CTkFrame(self.control_frame, fg_color="transparent")
-        self.button_frame.pack(side="right", padx=10, pady=10)
-        
-        # 开始按钮
-        self.start_btn = ctk.CTkButton(
-            self.button_frame,
-            text="▶ 开始录音",
-            command=self._on_start_click,
-            width=110,
-            height=36,
-            fg_color=AppColors.SUCCESS,
-            hover_color=AppColors.SUCCESS_HOVER
-        )
-        self.start_btn.pack(side="left", padx=4)
-
-        # 暂停/继续按钮
-        self.pause_btn = ctk.CTkButton(
-            self.button_frame,
-            text="⏸ 暂停",
-            command=self._on_pause_click,
-            width=90,
-            height=36,
-            state="disabled",
-            fg_color=AppColors.WARNING,
-            hover_color=AppColors.WARNING_HOVER
-        )
-        self.pause_btn.pack(side="left", padx=4)
-
-        # 停止按钮
-        self.stop_btn = ctk.CTkButton(
-            self.button_frame,
-            text="⏹ 停止",
-            command=self._on_stop_click,
-            width=90,
-            height=36,
-            state="disabled",
-            fg_color=AppColors.DANGER,
-            hover_color=AppColors.DANGER_HOVER
-        )
-        self.stop_btn.pack(side="left", padx=4)
-
-        # 导出按钮
-        self.export_btn = ctk.CTkButton(
-            self.button_frame,
-            text="导出",
-            command=self._on_export_click,
-            width=80,
-            height=36,
-            fg_color=AppColors.PRIMARY,
-            hover_color=AppColors.PRIMARY_HOVER
-        )
-        self.export_btn.pack(side="left", padx=4)
-
-        # 帮助按钮（outlined 样式）
-        self.help_btn = ctk.CTkButton(
-            self.button_frame,
-            text="帮助",
-            command=self._show_help,
-            width=70,
-            height=36,
-            fg_color="transparent",
-            hover_color=AppColors.SECONDARY_HOVER,
-            border_width=2,
-            border_color=AppColors.SECONDARY,
-            text_color=AppColors.SECONDARY
-        )
-        self.help_btn.pack(side="left", padx=4)
-        
     def _create_content_area(self):
-        """创建中间内容区"""
-        self.content_frame = ctk.CTkFrame(self.main_frame)
-        self.content_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-        self.content_frame.grid_columnconfigure(0, weight=3)
-        self.content_frame.grid_columnconfigure(1, weight=1)
+        self.content_frame = ctk.CTkFrame(self.main_frame, fg_color='transparent')
+        self.content_frame.grid(row=1, column=0, padx=16, pady=0, sticky='nsew')
+        self.content_frame.grid_columnconfigure(0, weight=1)
         self.content_frame.grid_rowconfigure(0, weight=1)
-
-        # 左侧转录文本区
         self._create_transcription_area()
-
-        # 右侧设置面板 - 使用可滚动框架容纳所有选项
-        self.settings_scroll_frame = ctk.CTkScrollableFrame(
-            self.content_frame,
-            label_text="设置选项",
-            label_font=ctk.CTkFont(*AppFonts.TITLE)
-        )
-        self.settings_scroll_frame.grid(row=0, column=1, padx=(5, 10), pady=10, sticky="nsew")
-
-        # 在可滚动框架内创建设置内容
+        self.settings_window = ctk.CTkToplevel(self.root)
+        self.settings_window.withdraw()
+        self.settings_window.title('录音与整理设置')
+        self.settings_window.geometry('460x720')
+        self.settings_window.minsize(400, 500)
+        self.settings_window.transient(self.root)
+        self.settings_window.protocol('WM_DELETE_WINDOW', self.settings_window.withdraw)
+        self.settings_scroll_frame = ctk.CTkScrollableFrame(self.settings_window, label_text='录音与整理设置', label_font=AppFonts.TITLE)
+        self.settings_scroll_frame.pack(fill='both', expand=True, padx=16, pady=16)
         self._create_settings_panel()
-        
+        ctk.CTkLabel(self.settings_frame, text='阅读字号', font=AppFonts.SUBTITLE).pack(anchor='w', padx=18, pady=(16, 6))
+        self.font_size_menu = ctk.CTkOptionMenu(self.settings_frame, values=['16', '18', '20', '22', '24'], variable=self.font_size, command=self._on_font_size_change)
+        self.font_size_menu.pack(fill='x', padx=18, pady=(0, 16))
+
     def _create_transcription_area(self):
-        """创建转录文本区（优化视觉区分）"""
-        # 外层容器（添加边框效果）
-        self.transcription_outer = ctk.CTkFrame(
-            self.content_frame,
-            fg_color="transparent",
-            border_width=2,
-            border_color=AppColors.BORDER
-        )
-        self.transcription_outer.grid(row=0, column=0, padx=(10, 5), pady=10, sticky="nsew")
+        self.workspace = ReviewWorkspace(self.content_frame, font_size=self.font_size.get())
+        self.workspace.grid(row=0, column=0, sticky='nsew')
+        self.transcription_text = self.workspace.raw_text
+        self.search_entry = self.workspace.search_entry
+        self.scroll_lock_var = self.workspace.scroll_lock_var
 
-        self.transcription_frame = ctk.CTkFrame(self.transcription_outer, fg_color="transparent")
-        self.transcription_frame.pack(fill="both", expand=True, padx=8, pady=8)
-        self.transcription_frame.grid_columnconfigure(1, weight=1)
-        self.transcription_frame.grid_rowconfigure(1, weight=1)
+    def _show_settings(self):
+        self.settings_window.deiconify()
+        self.settings_window.lift()
+        self.settings_window.focus_force()
 
-        # 左侧标签
-        self.transcription_label = ctk.CTkLabel(
-            self.transcription_frame,
-            text="实时转录",
-            font=ctk.CTkFont(*AppFonts.TITLE)
-        )
-        self.transcription_label.grid(row=0, column=0, padx=(12, 0), pady=(12, 6), sticky="w")
+    def show_document(self, document, revisions, audio_available=False, audio_hint=None):
+        self.workspace.show_document(document, revisions, audio_available, audio_hint)
 
-        # 中间搜索框区域
-        self.search_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
-        self.search_frame.grid(row=0, column=1, padx=(10, 5), pady=(10, 5), sticky="ew")
+    def render_live(self, confirmed, partial, segments):
+        self.workspace.render_live(confirmed, partial, segments)
 
-        # 搜索输入框
-        self.search_entry = ctk.CTkEntry(
-            self.search_frame,
-            placeholder_text="搜索...",
-            width=140,
-            height=30
-        )
-        self.search_entry.pack(side="left", padx=(0, 4))
-
-        # 上一个匹配按钮（outlined 样式）
-        self.prev_btn = ctk.CTkButton(
-            self.search_frame,
-            text="▲",
-            command=self._search_prev,
-            width=28,
-            height=30,
-            fg_color="transparent",
-            hover_color=AppColors.SECONDARY_HOVER,
-            border_width=1,
-            border_color=AppColors.SECONDARY,
-            text_color=AppColors.SECONDARY
-        )
-        self.prev_btn.pack(side="left", padx=(0, 2))
-
-        # 下一个匹配按钮（outlined 样式）
-        self.next_btn = ctk.CTkButton(
-            self.search_frame,
-            text="▼",
-            command=self._search_next,
-            width=28,
-            height=30,
-            fg_color="transparent",
-            hover_color=AppColors.SECONDARY_HOVER,
-            border_width=1,
-            border_color=AppColors.SECONDARY,
-            text_color=AppColors.SECONDARY
-        )
-        self.next_btn.pack(side="left", padx=(0, 4))
-
-        # 字体大小标签
-        self.font_size_label = ctk.CTkLabel(
-            self.search_frame,
-            text="字体:",
-            font=ctk.CTkFont(*AppFonts.BODY_SMALL),
-            text_color=AppColors.TEXT_MUTED
-        )
-        self.font_size_label.pack(side="left", padx=(8, 2))
-
-        # 字体大小选择下拉框
-        self.font_size_menu = ctk.CTkOptionMenu(
-            self.search_frame,
-            values=["16", "18", "20", "22", "24"],
-            variable=self.font_size,
-            command=self._on_font_size_change,
-            width=50,
-            height=30,
-            font=ctk.CTkFont(*AppFonts.CAPTION)
-        )
-        self.font_size_menu.pack(side="left", padx=(0, 0))
-
-        # 右侧选项区域
-        self.options_frame = ctk.CTkFrame(self.transcription_frame, fg_color="transparent")
-        self.options_frame.grid(row=0, column=2, padx=(5, 12), pady=(10, 5), sticky="e")
-
-        # 滚动锁定复选框
-        self.scroll_lock_var = ctk.BooleanVar(value=False)
-        self.scroll_lock_check = ctk.CTkCheckBox(
-            self.options_frame,
-            text="滚动锁定",
-            variable=self.scroll_lock_var,
-            onvalue=True,
-            offvalue=False,
-            font=ctk.CTkFont(*AppFonts.BODY_SMALL)
-        )
-        self.scroll_lock_check.pack(side="right")
-
-        # 文本框（占据整行，优化视觉样式）
-        self.transcription_text = ctk.CTkTextbox(
-            self.transcription_frame,
-            wrap="word",
-            font=ctk.CTkFont(AppFonts.FAMILY, self.font_size.get()),
-            fg_color=AppColors.SURFACE,
-            border_width=1,
-            border_color=AppColors.BORDER,
-            corner_radius=6
-        )
-        self.transcription_text.grid(row=1, column=0, columnspan=3, padx=4, pady=(5, 4), sticky="nsew")
-        self.transcription_text.insert("0.0", "等待开始录音...")
-        self.transcription_text.configure(state="disabled")
-
-        # 搜索状态
-        self._search_matches: list[str] = []  # 存储所有匹配位置
-        self._current_match_index: int = -1
-        self._search_last_term: str = ""
-
-        # 配置行间距（改善可读性）
-        self.transcription_text.tag_config(
-            'line_spacing',
-            spacing2=AppFonts.LINE_SPACING,
-            spacing3=AppFonts.PARAGRAPH_SPACING
-        )
-
-        # 配置搜索高亮标签
-        self.transcription_text.tag_config(
-            "search_highlight",
-            background=AppColors.SEARCH_HIGHLIGHT_BG,
-            foreground=AppColors.SEARCH_HIGHLIGHT_FG
-        )
-        self.transcription_text.tag_config(
-            "search_current",
-            background=AppColors.SEARCH_CURRENT_BG,
-            foreground=AppColors.SEARCH_CURRENT_FG
-        )
-
-        # 绑定搜索事件
-        self.search_entry.bind("<Return>", self._on_search_enter)
-        self.search_entry.bind("<KeyRelease>", self._on_search_key)
-        
     def _create_settings_panel(self):
         """创建设置面板（放在可滚动框架内）"""
         # settings_frame 放在可滚动框架内部
@@ -378,10 +190,10 @@ class MainWindow:
         )
         self.style_label.pack(anchor="w", pady=(0, 6))
 
-        self.style_var = ctk.StringVar(value="cleaned")
+        self.style_var = ctk.StringVar(value="清理口语")
         self.style_menu = ctk.CTkOptionMenu(
             style_inner,
-            values=["raw", "cleaned", "paragraphs", "behavior_match"],
+            values=list(self.STYLE_LABELS),
             variable=self.style_var,
             command=self._on_style_change,
             height=32
@@ -392,12 +204,14 @@ class MainWindow:
         self.llm_para_var = ctk.BooleanVar(value=False)
         self.llm_para_check = ctk.CTkCheckBox(
             style_inner,
-            text="启用 LLM 语义分段（仅段落模式，消耗Token）",
+            text="使用 AI 语义分段（段落整理模式）",
             variable=self.llm_para_var,
             onvalue=True,
             offvalue=False
         )
         self.llm_para_check.pack(anchor="w")
+        self.style_hint = ctk.CTkLabel(style_inner, text="轻量清理口语，原文始终保留。", wraplength=320, justify="left", text_color=AppColors.TEXT_SECONDARY)
+        self.style_hint.pack(anchor="w", pady=(8, 0))
 
         # 卡片 2: 功能按钮区
         buttons_card = ctk.CTkFrame(self.settings_frame)
@@ -587,7 +401,7 @@ class MainWindow:
         
     def _create_status_bar(self):
         """创建底部状态栏（优化高度和布局）"""
-        self.status_frame = ctk.CTkFrame(self.main_frame, height=44)
+        self.status_frame = ctk.CTkFrame(self.main_frame, height=44, fg_color=AppColors.SURFACE)
         self.status_frame.grid(row=2, column=0, padx=12, pady=(6, 10), sticky="ew")
         self.status_frame.grid_propagate(False)
 
@@ -672,43 +486,57 @@ class MainWindow:
 
         # 闪烁动画控制
         self._is_recording_flashing = False
+        self._recording_indicator_timer_id = None
 
     def _on_start_click(self):
         """开始按钮点击"""
-        self.start_btn.configure(state="disabled")
-        self.pause_btn.configure(state="normal", text="暂停")
-        self.stop_btn.configure(state="normal")
-        self.status_label.configure(text="正在录音...")
-
-        if self.on_start_callback:
+        if not self.recording_state.busy and self.on_start_callback:
             self.on_start_callback()
 
     def _on_pause_click(self):
         """暂停/继续按钮点击"""
-        current_text = self.pause_btn.cget("text")
-
-        if current_text == "暂停":
-            # 切换到暂停状态
-            self.pause_btn.configure(text="继续")
-            self.status_label.configure(text="已暂停")
-            if self.on_pause_callback:
-                self.on_pause_callback()
-        else:
-            # 切换到继续状态
-            self.pause_btn.configure(text="暂停")
-            self.status_label.configure(text="正在录音...")
+        if self.recording_state == RecordingState.PAUSED:
             if self.on_resume_callback:
                 self.on_resume_callback()
+        elif self.recording_state.captures_audio and self.on_pause_callback:
+            self.on_pause_callback()
 
     def _on_stop_click(self):
         """停止按钮点击"""
-        self.stop_btn.configure(state="disabled")
-        self.pause_btn.configure(state="disabled", text="暂停")
-        self.start_btn.configure(state="normal")
-        self.status_label.configure(text="录音已停止")
-
-        if self.on_stop_callback:
+        if self.recording_state.captures_audio and self.on_stop_callback:
             self.on_stop_callback()
+
+    def set_recording_state(self, state: RecordingState) -> None:
+        """只由应用确认的生命周期驱动按钮、设置和录音指示灯。"""
+        self.recording_state = state
+        labels = {
+            RecordingState.READY: '就绪', RecordingState.CONNECTING: '正在连接语音服务…',
+            RecordingState.RECORDING: '正在录音', RecordingState.PAUSED: '已暂停',
+            RecordingState.RECONNECTING: '连接中断，正在尝试恢复',
+            RecordingState.STOPPING: '正在结束录音并保存会话…',
+            RecordingState.PROCESSING: '正在处理，请稍候…',
+            RecordingState.SAVED: '会话已保存', RecordingState.ERROR: '操作失败，可重试',
+        }
+        self.start_btn.configure(state='disabled' if state.busy else 'normal')
+        self.pause_btn.configure(
+            state='normal' if state.captures_audio else 'disabled',
+            text='继续' if state == RecordingState.PAUSED else '暂停',
+        )
+        self.stop_btn.configure(state='normal' if state.captures_audio else 'disabled')
+        self.export_btn.configure(state='disabled' if state.busy else 'normal')
+        for widget in (
+            self.device_menu, self.refresh_device_btn, self.language_menu,
+            self.vad_slider, self.save_audio_switch, self.style_menu,
+            self.llm_para_check, self.behavior_btn, self.api_settings_btn,
+        ):
+            widget.configure(state='disabled' if state.busy else 'normal')
+        self.set_recording_indicator(state in {RecordingState.RECORDING, RecordingState.RECONNECTING})
+        self.update_status(labels[state])
+        if hasattr(self, 'workspace'):
+            self.workspace.set_busy(state.busy)
+            self.history_btn.configure(state='disabled' if state.busy else 'normal')
+        if hasattr(self, 'style_var') and not state.busy:
+            self.llm_para_check.configure(state='normal' if self.get_selected_style() == 'paragraphs' else 'disabled')
             
     def _on_export_click(self):
         """导出按钮点击"""
@@ -720,7 +548,9 @@ class MainWindow:
         logger.info(f"格式化风格已更改为: {choice}")
 
         # 如果用户切换到 behavior_match 且尚未配置行为，提示打开配置界面
-        if choice == "behavior_match" and self.on_behavior_config_callback is not None:
+        self.llm_para_check.configure(state="normal" if self.get_selected_style() == "paragraphs" else "disabled")
+        self.style_hint.configure(text=self.STYLE_HINTS[self.get_selected_style()])
+        if self.get_selected_style() == "behavior_match" and self.on_behavior_config_callback is not None:
             import tkinter.messagebox as messagebox
             result = messagebox.askyesno(
                 "配置关键行为",
@@ -728,6 +558,14 @@ class MainWindow:
             )
             if result:
                 self._on_behavior_config_click()
+        self.update_status('风格已切换；点击“重新整理”后应用到当前文档')
+
+    def set_review_style(self, style, llm_paragraphs=False):
+        label = next((label for label, code in self.STYLE_LABELS.items() if code == style), '原始转录')
+        self.style_var.set(label)
+        self.llm_para_var.set(bool(llm_paragraphs))
+        self.style_hint.configure(text=self.STYLE_HINTS[self.get_selected_style()])
+        self.llm_para_check.configure(state='normal' if style == 'paragraphs' else 'disabled')
 
     def _on_device_change(self, choice):
         """音频设备改变"""
@@ -775,25 +613,21 @@ class MainWindow:
         self.root.bind('<Command-b>', self._on_ctrl_b_shortcut)
         # F1: 打开帮助
         self.root.bind('<F1>', self._on_f1_shortcut)
+        self.root.bind('<Control-f>', lambda event: self.workspace.search_entry.focus_set())
+        self.root.bind('<Command-f>', lambda event: self.workspace.search_entry.focus_set())
 
     def _on_space_shortcut(self, event):
         """空格键快捷键处理"""
-        # 如果焦点在文本框，不触发快捷键（允许输入空格）
+        # 文本输入控件保留空格输入，不触发录音快捷键。
         focused = self.root.focus_get()
-        if focused and hasattr(focused, 'widget'):
-            widget_name = str(focused.widget).lower()
-            if 'text' in widget_name or 'entry' in widget_name:
-                return  # 文本框聚焦时不拦截空格
+        if isinstance(focused, (tk.Entry, tk.Text, tk.Spinbox)):
+            return
 
-        # 切换开始/停止/暂停状态
         if self.start_btn.cget('state') == 'normal':
-            # 当前可以开始，点击开始
             self._on_start_click()
         elif self.pause_btn.cget('state') == 'normal':
-            # 当前正在录音，可以暂停/继续
             self._on_pause_click()
         elif self.stop_btn.cget('state') == 'normal':
-            # 当前可以停止，点击停止
             self._on_stop_click()
 
     def _on_escape_shortcut(self, event):
@@ -808,7 +642,8 @@ class MainWindow:
 
     def _on_ctrl_b_shortcut(self, event):
         """Ctrl+B快捷键处理 - 行为配置"""
-        self._on_behavior_config_click()
+        if not self.recording_state.busy:
+            self._on_behavior_config_click()
 
     def _on_f1_shortcut(self, event):
         """F1快捷键处理 - 打开帮助"""
@@ -910,118 +745,23 @@ class MainWindow:
             self.transcription_text.see("end")
 
     def _clear_search(self):
-        """清空搜索高亮和状态"""
-        self.transcription_text.tag_remove("search_highlight", "0.0", "end")
-        self.transcription_text.tag_remove("search_current", "0.0", "end")
-        self._search_matches = []
-        self._current_match_index = -1
-        self._search_last_term = ""
+        self.search_entry.delete(0, 'end')
+        self.workspace.search()
 
     def _do_search(self):
-        """执行搜索，高亮所有匹配项"""
-        search_term = self.search_entry.get().strip()
-        if not search_term:
-            self._clear_search()
-            return
-
-        # 如果搜索词变化，重新搜索
-        if search_term != self._search_last_term:
-            self._clear_search()
-            self._search_last_term = search_term
-
-        # 获取全文内容
-        content = self.transcription_text.get("0.0", "end-1c")
-        if not content:
-            return
-
-        # 不区分大小写搜索
-        content_lower = content.lower()
-        term_lower = search_term.lower()
-        term_len = len(search_term)
-
-        # 查找所有匹配位置
-        matches = []
-        start = 0
-        while True:
-            pos = content_lower.find(term_lower, start)
-            if pos < 0:
-                break
-            # 转换为 tkinter 位置格式 (line.char)
-            line = content[:pos].count('\n')
-            char = pos - content[:pos].rfind('\n') - 1
-            start_pos = f"{line+1}.{char}"
-            end_pos = f"{line+1}.{char + term_len}"
-            matches.append((start_pos, end_pos))
-            start = pos + 1
-
-        # 高亮所有匹配项
-        self.transcription_text.tag_remove("search_highlight", "0.0", "end")
-        self.transcription_text.tag_remove("search_current", "0.0", "end")
-
-        for start_pos, end_pos in matches:
-            self.transcription_text.tag_add("search_highlight", start_pos, end_pos)
-
-        self._search_matches = [start for start, _ in matches]
-
-        if self._search_matches:
-            self._current_match_index = 0
-            self._highlight_current()
-            self._goto_current()
-            logger.debug(f"搜索完成，找到 {len(self._search_matches)} 个匹配项")
-        else:
-            logger.debug("未找到匹配项")
-
-    def _highlight_current(self):
-        """高亮当前匹配项"""
-        self.transcription_text.tag_remove("search_current", "0.0", "end")
-        if 0 <= self._current_match_index < len(self._search_matches):
-            start_pos = self._search_matches[self._current_match_index]
-            search_term = self.search_entry.get().strip()
-            # 计算结束位置
-            line_char = start_pos.split('.')
-            line = int(line_char[0])
-            char = int(line_char[1])
-            end_pos = f"{line}.{char + len(search_term)}"
-            self.transcription_text.tag_add("search_current", start_pos, end_pos)
-
-    def _goto_current(self):
-        """滚动到当前匹配项"""
-        if 0 <= self._current_match_index < len(self._search_matches):
-            pos = self._search_matches[self._current_match_index]
-            self.transcription_text.see(pos)
+        self.workspace.search()
 
     def _search_next(self):
-        """搜索下一个匹配项"""
-        if not self._search_matches:
-            self._do_search()
-            return
-        if self._current_match_index < len(self._search_matches) - 1:
-            self._current_match_index += 1
-        else:
-            self._current_match_index = 0  # 循环到开头
-        self._highlight_current()
-        self._goto_current()
+        self.workspace.search_next()
 
     def _search_prev(self):
-        """搜索上一个匹配项"""
-        if not self._search_matches:
-            self._do_search()
-            return
-        if self._current_match_index > 0:
-            self._current_match_index -= 1
-        else:
-            self._current_match_index = len(self._search_matches) - 1  # 循环到末尾
-        self._highlight_current()
-        self._goto_current()
+        self.workspace.search_next(-1)
 
     def _on_search_enter(self, event):
-        """回车键触发搜索下一个"""
-        self._search_next()
+        self.workspace.search_next()
 
     def _on_search_key(self, event):
-        """按键释放时实时搜索"""
-        # 延迟一点搜索，让输入更流畅
-        self.transcription_text.after(100, self._do_search)
+        self.workspace._schedule_search(event)
 
     def is_scroll_lock_enabled(self) -> bool:
         """获取是否启用滚动锁定
@@ -1068,14 +808,19 @@ class MainWindow:
             is_recording: 是否正在录音
         """
         if is_recording:
-            self._is_recording_flashing = True
-            self._flash_recording_indicator()
+            if not self._is_recording_flashing:
+                self._is_recording_flashing = True
+                self._flash_recording_indicator()
         else:
             self._is_recording_flashing = False
+            if self._recording_indicator_timer_id:
+                self.root.after_cancel(self._recording_indicator_timer_id)
+                self._recording_indicator_timer_id = None
             self.recording_indicator.configure(text_color=AppColors.RECORDING_INDICATOR_OFF)
 
     def _flash_recording_indicator(self):
         """闪烁录音指示灯（脉冲效果）"""
+        self._recording_indicator_timer_id = None
         if not self._is_recording_flashing:
             return
 
@@ -1087,7 +832,7 @@ class MainWindow:
             self.recording_indicator.configure(text_color="red")
 
         # 500ms 后再次切换
-        self.root.after(500, self._flash_recording_indicator)
+        self._recording_indicator_timer_id = self.root.after(500, self._flash_recording_indicator)
 
     def get_selected_style(self) -> str:
         """获取当前选中的格式化风格
@@ -1095,7 +840,7 @@ class MainWindow:
         Returns:
             风格名称字符串
         """
-        return self.style_var.get()
+        return self.STYLE_LABELS.get(self.style_var.get(), self.style_var.get())
 
     def get_selected_device_index(self) -> Optional[int]:
         """获取当前选中的音频设备索引
@@ -1194,19 +939,16 @@ class MainWindow:
         保存所有用户配置到配置文件
         """
         try:
-            # 读取现有配置如果存在
             config = {}
             if self.USER_CONFIG_FILE.exists():
                 with open(self.USER_CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
 
-            # 更新所有当前设置
             config["appearance_mode"] = self.appearance_mode.get()
             config["font_size"] = self.font_size.get()
             config["asr_language"] = self.get_asr_language()
             config["vad_silence_ms"] = self.get_vad_silence_ms()
 
-            # 保存回去
             with open(self.USER_CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
 
@@ -1223,6 +965,7 @@ class MainWindow:
         """
         # 应用主题
         ctk.set_appearance_mode(mode)
+        self.workspace.refresh_theme()
         # 保存用户选择
         self._save_user_config()
         logger.info(f"主题已切换: {mode}")
@@ -1236,6 +979,7 @@ class MainWindow:
         """
         size = int(size_str)
         # 更新文本框字体（保持平台自适应字体族一致）
+        self.workspace.set_font_size(size)
         self.transcription_text.configure(font=ctk.CTkFont(AppFonts.FAMILY, size))
         # 保存配置
         self._save_user_config()
@@ -1250,58 +994,85 @@ class MainWindow:
         help_window.transient(self.root)
         help_window.grab_set()
 
-        # 帮助文本
-        help_text = """
-\033[1m快速开始\033[0m
+        help_text = """快速开始
 ────────────────────────────────
-1. 选择识别语言：在右侧设置面板选择您需要识别的语言
-2. 选择音频设备：选择麦克风输入设备
-3. 选择格式化风格：
-   • 原始(raw)：不做任何处理，直接输出
-   • 清洗(cleaned)：去除语气词、重复
-   • 分段(paragraphs)：按停顿整理为自然段落
-   • 行为匹配(behavior_match)：LLM识别自定义关键行为
-4. 点击「▶ 开始录音」开始转录
+1. 打开右上角「设置」，选择麦克风、识别语言、VAD 和整理风格
+2. 在「配置关键行为」中定义行为名称、描述和示例（可选）
+3. 点击「开始录音」；录音中可暂停或继续
+4. 点击「结束录音」，等待 AI 整理完成
+5. 在「整理稿」中修订，用「对照」核查变化
+6. 点击「保存修订」保留版本，或直接「导出文稿」
+7. 在「会话历史」中搜索并重新打开本地记录
 
-\033[1m快捷键\033[0m
+工作台按钮
 ────────────────────────────────
-空格      → 智能切换：未开始→开始，录音中→暂停，暂停→恢复
-Esc       → 直接停止录音
-Ctrl+S    → 导出文档
-Ctrl+B    → 打开行为配置
-F3        → 搜索文本
-F5        → 刷新设备列表
+开始录音 / 暂停 / 结束录音：控制当前录音会话
+导出文稿：导出当前整理稿；原始会话和音频仍保留
+保存标题：保存会话标题，便于历史检索
+保存修订：把当前整理稿保存为可恢复版本
+撤销 / 重做：编辑整理稿时回退或恢复操作
+重新整理：按当前风格和配置重新生成；输入未变化时复用上次行为分析
+重新分析：忽略上次行为分析，强制重新调用模型；用于主动获取新结果
+取消整理：中止正在进行的 AI 整理；已发送的请求可能仍需等待结束
+回到最新：转录滚动锁定后，快速回到最新内容
+播放 / 停止：回放已保存的原始音频；无音频时仅可查看文字
+片段 / 分析 / 版本：查看句级片段、行为引文依据和历史整理稿
+会话历史：按标题或原文搜索本地会话
 
-\033[1mVAD参数说明\033[0m
+重新整理与重新分析
 ────────────────────────────────
-VAD(语音活动检测)静音时长控制断句灵敏度：
-• 200-500ms  → 灵敏断句，适合对话、访谈场景
-• 500-1000ms → 平衡模式，适合一般场景
-• 1000-2000ms → 稳定断句，适合朗读、演讲场景
+• 原文、行为配置、模型和提示词版本均未变化时，「重新整理」复用上次分析，结果稳定且不重复消耗 Token
+• 修改行为定义、模型、AI 分段或分块设置后，「重新整理」会自动重新分析
+• 「重新分析」始终重新调用模型；同一文本的结果可能有差异，这是 LLM 判定的正常随机性
+• 人工修改整理稿不会改变行为分析依据；需要更新分析时请重新整理或重新分析
 
-\033[1m行为匹配功能\033[0m
+录音时长与稳定性
 ────────────────────────────────
-1. 点击「行为配置」按钮添加您要识别的行为
-2. 每个行为包含：名称 + 描述 + （可选）示例
-3. 应用支持4-7个自定义行为，内置多个场景模板
-4. 停止录音后，LLM会自动识别并原位标记匹配结果
-5. 文档末尾自动生成行为频率统计表格
+• 单次实时识别会话的服务端上限约 30 分钟；应用会在约 20 分钟且检测到至少 2 秒静音时自动轮替会话
+• 长时间连续说话可能接近 30 分钟上限；建议在 20 分钟左右停顿 2-3 秒，让应用安全轮替
+• 应用没有总时长硬上限，但长时间录音依赖磁盘空间和稳定网络；16kHz 单声道 WAV 约 115MB/小时
+• 网络中断时应用会自动重连；已确认的文本会保留，未发送的音频可能形成缺口
+• 启用「保存原始音频」后才能回听和保留 WAV；关闭后仅保留文本
 
-\033[1m常用提示\033[0m
+快捷键
+────────────────────────────────
+空格        → 未开始则开始；录音中暂停；暂停中继续
+Esc         → 直接结束录音
+Ctrl+S      → 导出文档
+Ctrl+B      → 打开行为配置（macOS 可用 Command+B）
+Ctrl+F / F3 → 搜索当前文稿
+F5          → 刷新音频设备列表
+
+VAD 参数
+────────────────────────────────
+VAD（语音活动检测）静音时长控制断句灵敏度：
+• 200-500ms   → 灵敏断句，适合对话、访谈
+• 500-1000ms  → 平衡模式，适合一般场景
+• 1000-2000ms → 稳定断句，适合朗读、演讲
+
+行为分析
+────────────────────────────────
+1. 支持 4-7 个自定义行为，内置会议、面试、心理咨询等模板
+2. 行为描述和示例越具体，模型判定越稳定
+3. 可启用 AI 语义分段和自动分块，提升长文本分析质量
+4. 分析结果在正文原位标记，并在文末生成行为频率统计表
+5. 频次表示模型识别且可在原文中定位的引文数量，不等同于绝对行为次数
+6. 统计表会显示分析模型、分析时间，并提示 LLM 判定存在随机性
+
+常用提示
 ────────────────────────────────
 • 暂停录音：录音中点击「暂停」或按空格，可暂停后继续
-• 滚动锁定：勾选后文本不会自动滚动到底部，方便查看历史
-• 主题切换：在右侧设置可选择浅色/深色/跟随系统
-• 字体大小：可调整转录文本显示字体大小
-• 网络断开：应用会自动重连，不丢失已转录内容
-• 意外退出：重新启动会提示恢复未完成的录音
+• 滚动锁定：向上滚动后暂停跟随，点击「回到最新」继续跟随
+• 主题切换：在底部状态栏选择浅色/深色/跟随系统
+• 字体大小：在设置中调整转录文本显示字号
+• 意外退出：重新启动会提示恢复最近保存的会话
+• 隐私：API Key 保存在本机 .env；默认日志不记录完整转写内容
 
-\033[1m导出\033[0m
+导出
 ────────────────────────────────
-支持三种格式：
-• Markdown (*.md) - 适合阅读和分享
-• Word (*.docx) - 适合正式文档
-• JSON (*.json) - 保留完整元数据用于二次处理
+• Markdown (*.md) - 适合阅读和分享，保留行为标记
+• Word (*.docx) - 适合正式文档和打印
+• JSON (*.json) - 保留完整元数据、片段和行为匹配结果
 """
 
         # 创建文本框显示帮助
@@ -1315,10 +1086,7 @@ VAD(语音活动检测)静音时长控制断句灵敏度：
         )
         help_textbox.pack(padx=10, pady=10, fill="both", expand=True)
 
-        # 插入文本（去掉ANSI转义码用于显示）
-        import re
-        clean_help_text = re.sub(r'\033\[\d+m', '', help_text)
-        help_textbox.insert("0.0", clean_help_text.strip())
+        help_textbox.insert("0.0", help_text.strip())
         help_textbox.configure(state="disabled")
 
         # 关闭按钮
@@ -1350,6 +1118,10 @@ VAD(语音活动检测)静音时长控制断句灵敏度：
             self.root,
             initial_dashscope=settings.api.dashscope_api_key,
             initial_bailian=settings.api.bailian_api_key,
+            initial_region=settings.api.dashscope_region,
+            initial_workspace=settings.api.dashscope_workspace_id,
+            initial_proxy_mode=settings.api.proxy_mode,
+            initial_proxy_url=settings.api.proxy_url,
             is_first_launch=False
         )
         self.root.wait_window(dialog.window)

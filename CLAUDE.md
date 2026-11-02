@@ -139,7 +139,7 @@ python run_gui.py
 ### 运行测试
 ```bash
 # 单元测试（无需 API Key，可离线运行）
-pytest tests/ -v -m "not requires_api"
+pytest tests/ --ignore=tests/e2e -v -m "not requires_api"
 
 # 端到端功能测试（需要 API Key）
 python tests/e2e/test_realtime_asr.py
@@ -152,11 +152,16 @@ python tests/e2e/test_behavior_matcher_llm.py
 ### 环境变量配置
 
 在 `.env` 文件中配置:
-```
+
+```dotenv
 DASHSCOPE_API_KEY=your_dashscope_api_key_here
 BAILIAN_API_KEY=your_bailian_api_key_here  # 可选，默认使用 DASHSCOPE_API_KEY
 DASHSCOPE_REGION=cn-beijing
 OUTPUT_DIR=./output
+# BAILIAN_MODEL=qwen-plus
+# BAILIAN_SEED=42
+# LOG_LLM_RAW=false
+# LOG_ASR_TEXT=false
 ```
 
 ### 格式化风格
@@ -228,7 +233,7 @@ tests/
 **运行测试：**
 ```bash
 # 运行所有单元测试（无需 API Key，可离线运行）
-pytest tests/ -v -m "not requires_api"
+pytest tests/ --ignore=tests/e2e -v -m "not requires_api"
 
 # 运行所有测试（包括需要 API Key 的端到端测试）
 pytest tests/ -v

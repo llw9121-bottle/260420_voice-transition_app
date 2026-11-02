@@ -6,6 +6,10 @@
 
 import sys
 import threading
+import copy
+from concurrent.futures import ThreadPoolExecutor
+from queue import Empty, Queue
+from uuid import uuid4
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -16,10 +20,14 @@ from loguru import logger
 # 计算项目根目录
 # PyInstaller 打包后，需要从可执行文件位置推算项目根目录
 if getattr(sys, 'frozen', False):
-    # 打包运行：可执行文件在 dist/AppName/AppName.exe
-    # 项目根目录就是可执行文件所在目录
-    app_dir = Path(sys.executable).parent
-    project_root = app_dir
+    if sys.platform == 'darwin':
+        # macOS .app 的数据目录放在 bundle 同级，避免写入只读内部目录。
+        try:
+            project_root = Path(sys.executable).resolve().parents[2].parent
+        except IndexError:
+            project_root = Path(sys.executable).parent
+    else:
+        project_root = Path(sys.executable).parent
 else:
     # 源码运行：从当前文件位置推算
     project_root = Path(__file__).parent
@@ -30,9 +38,18 @@ from gui.main_window import MainWindow
 from gui.export_dialog import ExportDialog
 from gui.behavior_config_dialog import BehaviorConfigDialog
 from core.realtime_transcriber import RealtimeTranscriber
+from core.recording_state import RecordingState
+from core.session_store import SessionStore
+from core.audio_player import AudioPlayer
+from core.review import add_revision
+from core.processing import ProcessingContext
+from utils.exceptions import ProcessingCancelled
+from gui.session_history_dialog import SessionHistoryDialog
 from core.formatter.base import FormattedDocument, FormattingStyle, BehaviorMatch
 from core.formatter.styles import RawStyle, CleanedStyle, ParagraphStyle, BehaviorMatchStyle
-from core.formatter.behavior_matcher import BehaviorConfig, BehaviorDefinition
+from core.formatter.behavior_matcher import (
+    BehaviorConfig, BehaviorDefinition, can_reuse_analysis,
+)
 
 
 class VoiceTranscriptionApp:
@@ -65,6 +82,33 @@ class VoiceTranscriptionApp:
 
         # 应用程序状态
         self.is_recording = False
+        self.recording_state = RecordingState.READY
+        self._data_lock = threading.RLock()
+        self._ui_events = Queue()
+        self._display_dirty = threading.Event()
+        self._closed = self._closing = False
+        self._storage = ThreadPoolExecutor(max_workers=1, thread_name_prefix='session-save')
+        self.session_store = SessionStore(project_root / 'sessions')
+        self._session_settings = {}
+        self._audio_path = None
+        self._exported_paths = []
+        self._save_future = None
+        self._duration_timer_id = None
+        self._stop_failed = False
+        self._asr_error_notified = False
+        self._audio_copy_error = None
+        self.transcriber = None
+        self.audio_player = AudioPlayer()
+        self._revisions = []
+        self._draft_dirty = False
+        self._format_token = 0
+        self._format_context = None
+        self._format_worker = None
+        self._format_active = False
+        self._draft_save_pending = False
+        self._export_dialog = None
+        self._playback_position = 0.0
+        self._playback_error = None
         self.current_document: Optional[FormattedDocument] = None
         self.behavior_config: Optional[BehaviorConfig] = None
 
@@ -74,11 +118,12 @@ class VoiceTranscriptionApp:
 
         # 自动保存临时文件配置
         self._auto_save_timer_id: Optional[str] = None
-        self._current_tmp_file: Optional[Path] = None
         
         # 创建主窗口
         self.main_window = MainWindow()
         self._setup_callbacks()
+        self.main_window.root.protocol('WM_DELETE_WINDOW', self._on_close)
+        self.main_window.root.after(50, self._poll_ui_events)
         
         logger.info("应用程序初始化完成")
 
@@ -102,136 +147,109 @@ class VoiceTranscriptionApp:
             on_export=self._on_export_document,
             on_behavior_config=self._on_behavior_config
         )
+        self.main_window.workspace.callbacks = {
+            'draft': self._on_draft_changed, 'commit': self._commit_review,
+            'reprocess': self._reprocess_document,
+            'reanalyze': self._reanalyze_document,
+            'restore_version': self._restore_version,
+            'history': self._open_history, 'rename': self._rename_session,
+            'play': self._toggle_playback, 'stop_audio': self._stop_playback,
+            'seek': self._seek_audio,
+            'cancel_processing': self._cancel_format,
+        }
         
     def _on_start_recording(self):
-        """开始录音回调"""
-        logger.info("开始录音")
-        self.is_recording = True
+        if self.recording_state.busy or self._closing:
+            return
+        if self.main_window.get_selected_style() == 'behavior_match' and not self.behavior_config:
+            self._open_behavior_config()
+        self._capture_review(checkpoint=True)
+        self._stop_playback()
+        if self.current_document:
+            self._set_state(RecordingState.PROCESSING)
+            self._save_session(on_saved=self._start_new_recording)
+        else:
+            self._start_new_recording()
 
-        # 开始录音前检查：如果选择了 behavior_match 但未配置行为，提示用户确认
-        current_style = self.main_window.style_var.get()
-        if current_style == "behavior_match":
-            if not self.behavior_config or not self.behavior_config.behaviors:
-                import tkinter.messagebox as messagebox
-                result = messagebox.askyesno(
-                    "关键行为未配置",
-                    "当前选择的是「行为匹配」格式化风格，但尚未配置关键行为定义。\n\n行为匹配需要您先定义要识别的关键行为才能调用百炼 LLM 进行分析。\n\n是否现在打开配置界面？"
-                )
-                if result:
-                    self._open_behavior_config()
-
-        # 重置状态
-        self.confirmed_text = ""
-        self.current_partial = ""
-
-        # 创建新文档
-        # 获取 ASR 设置
+    def _start_new_recording(self):
+        if self._closing:
+            self._save_session(on_saved=self._finish_close)
+            return
+        self._stop_auto_save()
+        self._recovered_audio_issues = {}
+        self._revisions = []
+        self._draft_dirty = False
+        self._asr_error_notified = False
         language = self.main_window.get_asr_language()
-        vad_silence_ms = self.main_window.get_vad_silence_ms()
-
-        self.current_document = FormattedDocument(
-            title=f"录音_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            raw_text="",
-            style=FormattingStyle.RAW,
-            session_id=f"session_{datetime.now().timestamp()}",
-            language=language,
-            created_at=datetime.now()
-        )
-
-        # 更新 UI
-        self.main_window.update_status("正在录音...")
-        self.main_window.update_duration(0)
-        self.main_window.set_recording_indicator(True)
-        self.main_window.transcription_text.configure(state="normal")
-        self.main_window.transcription_text.delete("0.0", "end")
-        self.main_window.transcription_text.insert("0.0", "开始录音...\n\n")
-        self.main_window.transcription_text.configure(state="disabled")
-
-        # 启动实时转录线程
-        try:
-            # 使用配置的API Key
-            api_key = settings.api.dashscope_api_key if settings.api.dashscope_api_key else None
-            # 获取保存音频选项
-            save_audio = self.main_window.get_save_audio()
-            # 创建转录器
-            self.transcriber = RealtimeTranscriber(
-                api_key=api_key,
-                language=language,
-                vad_silence_ms=vad_silence_ms,
-                save_audio=save_audio
+        session_id = 'session_' + uuid4().hex
+        self._session_settings = {
+            'language': language,
+            'vad_silence_ms': self.main_window.get_vad_silence_ms(),
+            'device_index': self.main_window.get_selected_device_index(),
+            'save_audio': self.main_window.get_save_audio(),
+            'style': self.main_window.get_selected_style(),
+            'llm_paragraphs': self.main_window.get_enable_llm_paragraphs(),
+        }
+        self._audio_path = self.session_store.directory / f'{session_id}.wav' if self._session_settings['save_audio'] else None
+        self._audio_copy_error = None
+        self._exported_paths = []
+        self.transcriber = None
+        with self._data_lock:
+            self.confirmed_text = self.current_partial = ''
+            self.current_document = FormattedDocument(
+                title=f"录音_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                session_id=session_id, language=language,
             )
+        self._show_document()
+        self._update_gui_display()
+        self.main_window.update_duration(0)
+        self._set_state(RecordingState.CONNECTING)
+        options = dict(self._session_settings)
+        audio_path = self._audio_path
 
-            def on_text(text, is_final):
-                # 数据累积必须同步完成！否则 stop 时会读到旧数据（因为 after 异步排队）
-                # GUI 更新放到 after 异步执行
-                self._update_transcription_data(text, is_final)
-                self.main_window.root.after(0, lambda: self._update_gui_display())
-
-            # 获取选中的音频设备索引
-            device_index = self.main_window.get_selected_device_index()
-            if device_index is not None:
-                logger.debug(f"使用选中的音频设备，索引: {device_index}")
-
-            self.transcriber.start(on_text=on_text, device_index=device_index)
-
-            # 启动时长更新定时器（每秒更新一次）
-            self._update_duration()
-
-            # 启动自动保存（防崩溃）
-            self._start_auto_save()
-        except Exception as e:
-            logger.error(f"启动实时转录失败: {e}")
-            # 弹出错误提示给用户
-            import tkinter.messagebox as messagebox
-            error_msg = str(e)
-            if "websocket connection could not established" in error_msg or "timeout" in error_msg.lower():
-                messagebox.showerror(
-                    "连接失败",
-                    f"无法连接到阿里云 DashScope 服务（连接超时）。\n\n"
-                    f"错误信息: {error_msg}\n\n"
-                    f"可能原因：\n"
-                    f"1. 网络无法访问阿里云，请检查网络连接\n"
-                    f"2. 防火墙阻止了 WebSocket 连接\n"
-                    f"3. API Key 无效或过期，请检查 .env 配置\n"
-                    f"4. 阿里云服务暂时不可用，请稍后重试"
+        def start_in_background():
+            try:
+                transcriber = RealtimeTranscriber(
+                    api_key=settings.api.dashscope_api_key or None,
+                    language=options['language'], vad_silence_ms=options['vad_silence_ms'],
+                    save_audio=options['save_audio'], audio_path=audio_path,
                 )
-            else:
-                messagebox.showerror(
-                    "启动失败",
-                    f"启动实时转录失败。\n\n"
-                    f"错误信息: {error_msg}\n\n"
-                    f"请检查日志获取更多详细信息。"
+                self.transcriber = transcriber
+                started = transcriber.start(
+                    on_text=self._update_transcription_data,
+                    on_segment=self._on_segment,
+                    on_status_change=lambda status: self._post_ui(self._on_transcriber_status, status),
+                    device_index=options['device_index'],
                 )
-            # 重置UI状态
-            self.main_window._on_stop_click()
-            self.is_recording = False
+                self._post_ui(self._on_start_complete, started, transcriber.last_error)
+            except Exception as error:
+                self._post_ui(self._on_start_complete, False, str(error))
+
+        threading.Thread(target=start_in_background, name='recording-start', daemon=True).start()
 
     def _update_duration(self):
-        """更新录音时长显示（定时器回调）"""
-        if self.is_recording and hasattr(self, 'transcriber') and self.transcriber:
-            duration = int(self.transcriber.get_duration())
-            volume = self.transcriber.get_current_volume()
-            self.main_window.update_duration(duration)
-            self.main_window.update_volume(volume)
-            # 1秒后再次更新
-            self.main_window.root.after(1000, self._update_duration)
+        self._duration_timer_id = None
+        if self.recording_state.captures_audio and self.transcriber:
+            self.main_window.update_duration(int(self.transcriber.get_duration()))
+            self.main_window.update_volume(0 if self.recording_state == RecordingState.PAUSED else self.transcriber.get_current_volume())
+            recorder = self.transcriber.recorder
+            if recorder.write_error or recorder.write_dropped_chunks:
+                self.main_window.update_status('音频写入不完整，转录仍在继续；详情已记录到会话')
+            elif recorder.dropped_chunks:
+                self.main_window.update_status('网络缓冲已满，部分音频未转写；详情已记录到会话')
+            self._duration_timer_id = self.main_window.root.after(250, self._update_duration)
 
     def _on_pause_recording(self):
-        """暂停录音回调"""
-        logger.info("暂停录音")
-        if hasattr(self, 'transcriber') and self.transcriber:
+        if self.recording_state in {RecordingState.RECORDING, RecordingState.RECONNECTING}:
             self.transcriber.pause()
-        self.is_recording = False  # 暂停时不再更新时长
+            self._set_state(RecordingState.PAUSED)
+            self._save_session()
 
     def _on_resume_recording(self):
-        """恢复录音回调"""
-        logger.info("恢复录音")
-        if hasattr(self, 'transcriber') and self.transcriber:
+        if self.recording_state == RecordingState.PAUSED:
             self.transcriber.resume()
-        self.is_recording = True
-        # 恢复时长更新定时器
-        self._update_duration()
-        
+            self._set_state(RecordingState.RECORDING)
+
     def _mock_recording(self):
         """模拟录音过程（用于测试）"""
         import time
@@ -252,35 +270,28 @@ class VoiceTranscriptionApp:
             self.main_window.root.after(0, lambda t=text: self._append_transcription(t))
             
     def _update_transcription_data(self, text: str, is_final: bool = True):
-        """
-        更新转录数据（线程安全，同步执行）
-
-        正确处理中间结果和最终结果：
-        - 中间结果: 替换当前显示，不追加到文档
-        - 最终结果: 追加到已确认文本，清空中间结果
-        """
-        if is_final:
-            # 最终结果：追加到已确认文本
-            if self.current_document:
-                self.confirmed_text += text + " "
-                self.current_document.raw_text = self.confirmed_text
-            self.current_partial = ""
-        else:
-            # 中间结果：替换当前中间结果（DashScope每次返回完整句子，不是增量）
-            self.current_partial = text
+        # ASR 线程只更新受锁保护的数据，不调用任何 Tk 方法。
+        with self._data_lock:
+            if is_final:
+                self.confirmed_text += text + ' '
+                if self.current_document:
+                    self.current_document.raw_text = self.confirmed_text.strip()
+                self.current_partial = ''
+            else:
+                self.current_partial = text
+        self._display_dirty.set()
 
     def _update_gui_display(self):
-        """更新 GUI 显示（在主线程执行）"""
-        # 更新 UI 显示
-        full_display = self.confirmed_text + self.current_partial
+        with self._data_lock:
+            confirmed, partial = self.confirmed_text, self.current_partial
+            segments = list(self.current_document.segments) if self.current_document else []
+        self.main_window.render_live(confirmed, partial, segments)
 
-        self.main_window.transcription_text.configure(state="normal")
-        self.main_window.transcription_text.delete("0.0", "end")
-        self.main_window.transcription_text.insert("0.0", full_display)
-        self.main_window.transcription_text.configure(state="disabled")
-        # 滚动锁定未勾选时才自动滚动到底部
-        if not self.main_window.is_scroll_lock_enabled():
-            self.main_window.transcription_text.see("end")
+    def _on_segment(self, segment):
+        with self._data_lock:
+            if self.current_document:
+                self.current_document.segments.append(segment)
+        self._display_dirty.set()
 
     def _append_transcription(self, text: str, is_final: bool = True):
         """
@@ -291,193 +302,168 @@ class VoiceTranscriptionApp:
         self._update_gui_display()
         
     def _on_stop_recording(self):
-        """停止录音回调"""
-        logger.info("停止录音")
-        self.is_recording = False
-
-        # 停止自动保存
+        if not self.recording_state.captures_audio:
+            return
+        self._set_state(RecordingState.STOPPING)
+        self._stop_failed = False
         self._stop_auto_save()
+        self._save_session()
+        transcriber = self.transcriber
+        output_path = Path(settings.document.output_dir) / f'{self.current_document.title}.wav'
 
-        # 停止转录器并获取最终完整文本
-        if hasattr(self, 'transcriber') and self.transcriber and self.current_document:
-            full_text = self.transcriber.stop()
-            # 获取录音时长（总是设置，不管文本是否为空）
-            duration = self.transcriber.get_duration()
-            # 使用实际音频数据计算的更准确时长，如果为0（save_audio=False），使用基于时间的时长
-            actual_duration = self.transcriber.get_audio_duration()
-            if actual_duration <= 0 and duration > 0:
-                actual_duration = duration
-            self.current_document.duration_seconds = actual_duration
+        def stop_in_background():
+            try:
+                text = transcriber.stop()
+                if self._audio_path:
+                    try:
+                        transcriber.save_audio_wav(output_path)
+                    except Exception as error:
+                        self._audio_copy_error = str(error)
+                        logger.error(f'原始录音复制到输出目录失败，会话录音仍保留: {error}')
+                self._post_ui(self._on_stop_complete, text)
+            except Exception as error:
+                self._post_ui(self._on_stop_error, str(error))
 
-            # 双保险：App层实时累积一定是完整的，优先使用 App层累积
-            # 因为每一次识别结果回调都会实时更新到 App层，不可能丢失
-            # transcriber 汇总用作兜底，防止累积不一致
-            # 无论如何，都要加上当前未确认的中间结果（一句话没说完就停止了），避免丢文本
-            total_text = self.confirmed_text + self.current_partial
-            total_text = total_text.strip()
+        threading.Thread(target=stop_in_background, name='recording-stop', daemon=True).start()
 
-            # 如果 App层累积为空，但 transcriber 有内容，使用 transcriber 的（兜底）
-            if not total_text and full_text.strip():
-                total_text = (full_text + " " + self.current_partial).strip()
-                logger.info(f"转录完成(兜底使用ASR汇总): 字数 {len(total_text)}, 时长 {actual_duration:.1f}秒")
-            else:
-                logger.info(f"转录完成(使用App层实时累积): 字数 {len(total_text)}, 时长 {actual_duration:.1f}秒")
-
-            self.current_document.raw_text = total_text
-
-            # 自动保存原始录音 WAV 文件到默认输出目录
-            # 仅在用户勾选了"保存原始音频"选项时才保存
-            from config.settings import settings
-            output_dir = Path(settings.document.output_dir)
-            save_audio = self.main_window.get_save_audio()
-            if save_audio and self.current_document.title and output_dir:
-                wav_path = output_dir / f"{self.current_document.title}.wav"
-                try:
-                    self.transcriber.save_audio_wav(wav_path)
-                    logger.info(f"原始录音已自动保存: {wav_path}")
-                except Exception as e:
-                    logger.error(f"保存原始录音失败: {e}")
-
-        # 更新 UI
-        self.main_window.update_status("录音已停止")
-        self.main_window.update_volume(0)
-        self.main_window.set_recording_indicator(False)
-        self.main_window.transcription_text.configure(state="normal")
-        self.main_window.transcription_text.insert("end", "\n\n录音结束。")
-        self.main_window.transcription_text.configure(state="disabled")
-
-        # 格式化文档
-        if self.current_document:
-            self._format_document()
-
-        # 不需要LLM处理的情况：格式化已经完成，可以直接提示导出
-        # 需要LLM处理的情况：会在格式化完成回调中提示导出
-        style = self.main_window.get_selected_style()
-        need_llm_processing = (
-            (style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors) or
-            (style == "paragraphs" and self.main_window.get_enable_llm_paragraphs())
-        )
-        if not need_llm_processing:
-            # 格式化已经完成，提示导出
-            self._prompt_export()
-        
-    def _format_document(self):
-        """格式化当前文档"""
+    def _format_document(self, force: bool = False):
         if not self.current_document:
             return
-
-        # 根据选择的风格进行格式化
-        style = self.main_window.style_var.get()
-
-        if style == "cleaned":
+        if self._closing:
+            self._save_session(on_saved=self._finish_close)
+            return
+        if self._format_worker and self._format_worker.is_alive():
+            self._set_state(RecordingState.SAVED)
+            if not self.current_document.formatted_text and not self.current_document.draft_edited:
+                self.current_document.formatted_text = self.current_document.raw_text
+            self._show_document()
+            self._save_session()
+            self.main_window.update_status('上次 AI 请求仍在结束；原文已保存，请稍后点击重新整理。')
+            return
+        style = self.main_window.get_selected_style()
+        self._session_settings.update(style=style, llm_paragraphs=self.main_window.get_enable_llm_paragraphs())
+        if style == 'cleaned':
             formatter = CleanedStyle()
-        elif style == "paragraphs":
-            # 获取LLM分段选项
-            enable_llm = self.main_window.get_enable_llm_paragraphs()
-            formatter = ParagraphStyle(enable_llm_reorganization=enable_llm)
-        elif style == "behavior_match":
-            if self.behavior_config and self.behavior_config.behaviors:
-                # 已有配置，直接使用
-                formatter = BehaviorMatchStyle(self.behavior_config)
-            else:
-                # 用户选择了 behavior_match 但未配置行为，提示并打开配置对话框
-                import tkinter.messagebox as messagebox
-                result = messagebox.askyesno(
-                    "需要配置关键行为",
-                    "行为匹配模式需要您定义要识别的关键行为。\n\n是否现在打开配置界面？"
-                )
-                if result:
-                    # 打开配置对话框
-                    self._open_behavior_config()
-                    # 配置完成后，无论是否有行为都使用 BehaviorMatchStyle
-                    # 如果用户配置了行为，使用用户配置；如果用户取消仍保持空配置
-                    formatter = BehaviorMatchStyle(self.behavior_config)
-                else:
-                    # 用户取消配置，仍然使用 BehaviorMatchStyle（空配置）
-                    # 创建默认空配置，保持行为匹配流程（会调用百炼 LLM）
-                    if not self.behavior_config:
-                        from core.formatter.behavior_matcher import BehaviorConfig
-                        self.behavior_config = BehaviorConfig()
-                    formatter = BehaviorMatchStyle(self.behavior_config)
+        elif style == 'paragraphs':
+            formatter = ParagraphStyle(enable_llm_reorganization=self.main_window.get_enable_llm_paragraphs())
+        elif style == 'behavior_match':
+            formatter = BehaviorMatchStyle(copy.deepcopy(self.behavior_config))
         else:
-            # raw 风格，不做处理
             formatter = RawStyle()
 
-        # 对于 behavior_match 模式，需要调用 LLM 处理，可能耗时较长
-        # 如果 paragraphs 启用了 LLM 分段，也需要调用 LLM，显示处理提示
-        need_llm_processing = (
-            (style == "behavior_match" and self.behavior_config and self.behavior_config.behaviors) or
-            (style == "paragraphs" and self.main_window.get_enable_llm_paragraphs())
-        )
+        # 原文、配置、模型和提示词版本均未变化时复用上次分析，
+        # 使重复整理结果稳定，并避免重复消耗 Token。
+        if (style == 'behavior_match' and not force
+                and can_reuse_analysis(self.current_document, self.behavior_config, settings.api.bailian_model)):
+            self._set_state(RecordingState.PROCESSING)
+            self._format_token += 1
+            token = self._format_token
+            self._format_active = True
+            document = copy.deepcopy(self.current_document)
+            try:
+                result = formatter.render_reused(document)
+            except Exception as error:
+                logger.warning(f'复用上次分析失败，改为重新分析: {error}')
+                self._format_active = False
+            else:
+                self.main_window.update_status('已复用上次分析结果；如需重新判定，请点击“重新分析”')
+                self._on_format_complete(result, None, token)
+                return
 
-        if need_llm_processing:
-            # 显示处理中弹窗
-            processing_window = self._show_processing_window()
-            # 在后台线程执行格式化（避免阻塞主线程导致界面卡住）
-            def format_in_background():
-                try:
-                    formatted_doc = formatter.format(self.current_document)
-                    # 在主线程更新结果
-                    self.main_window.root.after(0, lambda: self._on_format_complete(formatted_doc, processing_window))
-                except Exception as e:
-                    logger.error(f"格式化文档失败: {e}")
-                    # 在主线程显示错误
-                    self.main_window.root.after(0, lambda: self._on_format_error(e, processing_window))
+        self._set_state(RecordingState.PROCESSING)
+        self._format_token += 1
+        token = self._format_token
+        context = self._format_context = ProcessingContext(
+            lambda message: self._post_ui(self._on_format_progress, token, message))
+        self._format_active = True
+        self._on_format_progress(token, '正在准备整理…')
+        if force:
+            self.main_window.update_status('正在重新分析；LLM 判定可能因随机性有所不同')
+        document = copy.deepcopy(self.current_document)
+        document.behavior_matches = []
+        document.behaviors_config = None
+        document.analysis_text = ''
+        document.analysis_fingerprint = ''
+        document.analysis_model = ''
+        document.analysis_at = ''
+        document.draft_edited = False
+        document.processing_warnings = []
+        def format_in_background():
+            try:
+                context.report('正在整理文稿')
+                result = formatter.format(document, context=context)
+                context.check()
+                self._post_ui(self._on_format_complete, result, None, token)
+            except ProcessingCancelled:
+                pass
+            except Exception as error:
+                self._post_ui(self._on_format_error, error, None, token)
+        self._format_worker = threading.Thread(target=format_in_background, name='document-format', daemon=True)
+        self._format_worker.start()
 
-            threading.Thread(target=format_in_background, daemon=True).start()
-        else:
-            # 不需要LLM处理，直接在主线程执行
-            self.current_document = formatter.format(self.current_document)
-            self._update_formatted_display()
+    def _on_format_progress(self, token, message):
+        if token == self._format_token and self._format_active and not self._closing:
+            self.main_window.workspace.show_processing(message, cancellable=True)
 
-    def _on_format_complete(self, formatted_doc: FormattedDocument, processing_window):
-        """格式化完成回调（在主线程执行）"""
+    def _cancel_format(self):
+        if not self._format_active or self._closing:
+            return
+        self._format_context.cancel()
+        self._format_token += 1
+        self._format_active = False
+        if not self.current_document.formatted_text and not self.current_document.draft_edited:
+            self.current_document.formatted_text = self.current_document.raw_text
+            self.current_document.word_count = len(self.current_document.raw_text)
+        self._set_state(RecordingState.SAVED)
+        self._show_document()
+        self._save_session()
+        self.main_window.update_status('已取消整理，原文和原稿保留；已发送的 AI 请求可能仍在结束。')
+
+    def _on_format_complete(self, formatted_doc, processing_window=None, token=None):
+        if token is not None and token != self._format_token:
+            return
+        if not self.current_document or formatted_doc.session_id != self.current_document.session_id:
+            return
+        self._format_active = False
+        self.main_window.workspace.show_processing('正在保存整理结果…', cancellable=False)
         self.current_document = formatted_doc
-        # 关闭处理中弹窗
-        if processing_window:
-            processing_window.destroy()
-        # 更新显示
+        self._revisions = add_revision(self._revisions, formatted_doc.formatted_text, '自动整理')
+        self._draft_dirty = False
         self._update_formatted_display()
-        logger.info("文档格式化完成")
-        # 格式化完成后提示导出
-        self._prompt_export()
+        self._save_session(on_saved=self._on_processing_saved, persisted_state=RecordingState.SAVED)
 
-    def _on_format_error(self, error: Exception, processing_window):
+    def _on_format_error(self, error: Exception, processing_window=None, token=None):
+        if token is not None and token != self._format_token:
+            return
+        self._format_active = False
         """格式化错误回调（在主线程执行）"""
         # 关闭处理中弹窗
         if processing_window:
             processing_window.destroy()
+        self._set_state(RecordingState.SAVED)
+        self._show_document()
+        if self._closing:
+            self._save_session(on_saved=self._finish_close)
+            return
         # 显示错误
         import tkinter.messagebox as messagebox
+        message = getattr(error, 'message', str(error))
         messagebox.showerror(
             "格式化失败",
-            f"文档格式化过程中发生错误:\n\n{str(error)}\n\n请检查网络连接和 API Key 配置后重试。"
+            f"文档格式化过程中发生错误:\n\n{message}\n\n请检查网络连接和 API Key 配置后重试。"
         )
         logger.error(f"格式化文档失败: {error}")
 
     def _update_formatted_display(self):
-        """更新格式化后的文本显示"""
-        if self.current_document and self.current_document.formatted_text:
-            self.main_window.transcription_text.configure(state="normal")
-            self.main_window.transcription_text.delete("0.0", "end")
-            self.main_window.transcription_text.insert("0.0", self.current_document.formatted_text)
-            self.main_window.transcription_text.configure(state="disabled")
-            
+        self._show_document()
+
     def _prompt_export(self):
-        """提示导出文档"""
-        if not self.current_document:
-            return
-            
-        import tkinter.messagebox as messagebox
-        
-        if messagebox.askyesno(
-            "导出文档",
-            "录音已完成，是否导出文档？"
-        ):
-            self._on_export_document()
-            
+        self.main_window.update_status('会话已保存，可以审阅、修订或导出')
+
     def _on_export_document(self):
         """导出文档回调"""
+        if self.recording_state.busy or self._closing:
+            return
         if not self.current_document:
             import tkinter.messagebox as messagebox
             messagebox.showwarning(
@@ -486,28 +472,41 @@ class VoiceTranscriptionApp:
             )
             return
             
+        self._capture_review(checkpoint=True)
+        self._save_session()
         # 打开导出对话框
-        dialog = ExportDialog(
+        self._export_dialog = ExportDialog(
             self.main_window.root,
-            self.current_document,
-            on_export=self._on_export_complete
+            copy.deepcopy(self.current_document),
+            on_export=lambda path, identity=self.current_document.session_id: self._on_export_complete(path, identity)
         )
         
-    def _on_export_complete(self, file_path: Path):
+    def _on_export_complete(self, file_path: Path, session_id=None):
         """
         导出完成回调
 
         Args:
             file_path: 导出的文件路径
         """
-        # 导出完成，清理临时文件
-        self._stop_auto_save()
+        if session_id and (not self.current_document or self.current_document.session_id != session_id):
+            def save_export():
+                try:
+                    snapshot = self.session_store.load(session_id)
+                    snapshot.setdefault('exported_paths', []).append(str(file_path))
+                    self.session_store.save(snapshot)
+                except Exception as error:
+                    logger.error(f'保存历史会话导出记录失败: {error}')
+            self._storage.submit(save_export)
+            return
+        self._exported_paths.append(str(file_path))
+        self._save_session()
         logger.info(f"文档已导出: {file_path}")
         self.main_window.update_status(f"文档已导出: {file_path.name}")
 
     def _open_behavior_config(self):
         """打开行为配置对话框"""
-        self.main_window._on_behavior_config_click(initial_config=self.behavior_config)
+        if not self.recording_state.busy:
+            self.main_window._on_behavior_config_click(initial_config=self.behavior_config)
 
     def _on_behavior_config(self, config: BehaviorConfig):
         """行为配置保存回调"""
@@ -562,6 +561,10 @@ class VoiceTranscriptionApp:
                     self.main_window.root,
                     initial_dashscope=current_dashscope,
                     initial_bailian=current_bailian,
+                    initial_region=settings.api.dashscope_region,
+                    initial_workspace=settings.api.dashscope_workspace_id,
+                    initial_proxy_mode=settings.api.proxy_mode,
+                    initial_proxy_url=settings.api.proxy_url,
                     is_first_launch=True
                 )
 
@@ -570,154 +573,509 @@ class VoiceTranscriptionApp:
             logger.warning("DashScope API Key 未配置，弹出配置对话框")
 
     def _check_unsaved_recording(self):
-        """
-        检查是否有未完成的录音（上次应用崩溃遗留），如果有提示用户恢复。
-        """
-        import json
-        import glob
-        from datetime import datetime
-
-        # 查找所有临时文件
-        tmp_files = list(self.tmp_dir.glob("unsaved_*.json"))
-
-        if not tmp_files:
-            # 没有未完成的录音
-            return
-
-        # 按修改时间排序，最新的在最后
-        tmp_files.sort(key=lambda p: p.stat().st_mtime)
-        latest_tmp = tmp_files[-1]
-
-        # 读取创建时间
-        try:
-            with open(latest_tmp, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            create_time = datetime.fromtimestamp(latest_tmp.stat().st_mtime)
-            time_str = create_time.strftime('%Y-%m-%d %H:%M:%S')
-            text_length = len(data.get('confirmed_text', ''))
-
-            def ask_recovery():
-                import tkinter.messagebox as messagebox
-                result = messagebox.askyesno(
-                    "发现未完成的录音",
-                    f"检测到上次应用退出时遗留了一个未完成的录音:\n\n"
-                    f"创建时间: {time_str}\n"
-                    f"文本长度: {text_length} 字\n\n"
-                    f"是否恢复这个录音到编辑器？"
-                )
-                if result:
-                    self._restore_unsaved_recording(data)
-                    # 删除临时文件（恢复后不再需要）
+        # 在磁盘线程加载快照；兼容旧版 .tmp 恢复文件。
+        def load():
+            data = self.session_store.latest()
+            if data is None:
+                import json
+                for path in sorted(self.tmp_dir.glob('unsaved_*.json'), key=lambda p: p.stat().st_mtime, reverse=True):
                     try:
-                        latest_tmp.unlink()
-                    except Exception as e:
-                        logger.debug(f"删除临时文件失败: {e}")
+                        data = json.loads(path.read_text(encoding='utf-8'))
+                        break
+                    except (OSError, ValueError):
+                        continue
+            self._post_ui(self._offer_recovery, data)
+        self._storage.submit(load)
 
-            # 在主窗口加载后询问用户
-            self.main_window.root.after(800, ask_recovery)
-            logger.info(f"发现未完成录音: {latest_tmp.name}，已提示用户恢复")
-
-        except Exception as e:
-            logger.warning(f"读取未完成录音失败: {e}")
+    def _offer_recovery(self, data):
+        if not data or self.recording_state != RecordingState.READY or self._closing:
+            return
+        import tkinter.messagebox as messagebox
+        title = data.get('document', data).get('title', '未命名录音')
+        if messagebox.askyesno('恢复上次会话', f'发现已保存的会话：{title}。是否打开？'):
+            self._restore_unsaved_recording(data)
 
     def _restore_unsaved_recording(self, data: dict):
-        """
-        恢复未完成的录音到编辑器。
-
-        Args:
-            data: 保存的临时数据
-        """
-        # 恢复文本内容
-        self.confirmed_text = data.get('confirmed_text', '')
-        self.current_partial = data.get('current_partial', '')
-
-        # 创建文档对象
-        from core.formatter.base import FormattedDocument, FormattingStyle
-        from datetime import datetime
-
-        self.current_document = FormattedDocument(
-            title=data.get('title', '恢复的未完成录音'),
-            raw_text=self.confirmed_text + self.current_partial,
-            style=FormattingStyle.RAW,
-            session_id=data.get('session_id', f'recovered_{datetime.now().timestamp()}'),
-            created_at=datetime.now()
-        )
-        self.current_document.word_count = len(self.confirmed_text)
-
-        # 更新显示
+        self.audio_player.stop(reset=True)
+        self._playback_position = 0
+        self.transcriber = None
+        self._revisions = [item for item in data.get('revisions', []) if isinstance(item, dict)
+                           and all(isinstance(item.get(key), str) for key in ('id', 'text', 'label', 'created_at'))][-20:]
+        self._draft_dirty = False
+        if 'document' in data:
+            self.current_document = self.session_store.restore_document(data)
+            self._session_settings = data.get('settings', {})
+            self._audio_path = Path(data['audio_path']) if data.get('audio_path') else None
+            self._exported_paths = data.get('exported_paths', [])
+            self._recovered_audio_issues = data.get('audio_issues', {})
+            self.behavior_config = None
+            if data.get('behavior_config'):
+                self.behavior_config = BehaviorConfig.from_dict(data['behavior_config'])
+        else:
+            self.current_document = FormattedDocument(
+                title=data.get('title', '恢复的录音'),
+                session_id=data.get('session_id', 'session_' + uuid4().hex),
+                raw_text=(data.get('confirmed_text', '') + data.get('current_partial', '')).strip(),
+            )
+        # 恢复后的原文已包含未确认句尾，不再重复附加中间结果。
+        self.confirmed_text = self.current_document.raw_text
+        self.current_partial = ''
+        if not self.current_document.formatted_text and not self._revisions and not self.current_document.draft_edited:
+            self.current_document.formatted_text = self.current_document.raw_text
+            self.current_document.word_count = len(self.current_document.formatted_text)
+        self._audio_copy_error = data.get('audio_copy_error')
+        self.main_window.set_review_style(self.current_document.style.value, self._session_settings.get('llm_paragraphs', False))
+        self._set_state(RecordingState.SAVED)
         self._update_gui_display()
-        self.main_window.update_status("已恢复未完成的录音")
-        logger.info(f"成功恢复未完成录音，字数: {len(self.confirmed_text)}")
+        self._update_formatted_display()
+        self.main_window.update_duration(int(self.current_document.duration_seconds))
+        self._save_session()
 
     def _start_auto_save(self):
-        """
-        启动自动保存定时器，每隔 30 秒自动保存当前转录内容。
-        """
-        # 停止之前的定时器（如果有）
         self._stop_auto_save()
-
-        # 创建新的临时文件
-        timestamp = int(datetime.now().timestamp())
-        self._current_tmp_file = self.tmp_dir / f"unsaved_{timestamp}.json"
-
-        # 启动定时器，每 30 秒保存一次
         self._auto_save_loop()
-        logger.debug("自动保存已启动，间隔 30 秒")
 
     def _auto_save_loop(self):
-        """自动保存循环"""
-        if self.is_recording:
+        self._auto_save_timer_id = None
+        if self.recording_state.captures_audio:
             self._auto_save()
-            # 30 秒后再次保存
-            self._auto_save_timer_id = self.main_window.root.after(30000, self._auto_save_loop)
+            self._auto_save_timer_id = self.main_window.root.after(5000, self._auto_save_loop)
 
     def _auto_save(self):
-        """
-        自动保存当前转录内容到临时文件。
-        """
-        if not self._current_tmp_file:
-            return
-
-        try:
-            import json
-            # 保存当前状态
-            data = {
-                'confirmed_text': self.confirmed_text,
-                'current_partial': self.current_partial,
-                'title': self.current_document.title if self.current_document else '未命名',
-                'session_id': self.current_document.session_id if self.current_document else '',
-                'saved_at': datetime.now().isoformat()
-            }
-
-            with open(self._current_tmp_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-            logger.debug(f"自动保存完成: {self._current_tmp_file.name} ({len(self.confirmed_text)} 字)")
-
-        except Exception as e:
-            logger.warning(f"自动保存失败: {e}")
+        # 慢磁盘时跳过周期快照，防止积压；结束与退出快照始终提交。
+        if self._save_future is None or self._save_future.done():
+            self._save_session()
 
     def _stop_auto_save(self):
-        """
-        停止自动保存，清理临时文件。
-        """
-        # 取消定时器
         if self._auto_save_timer_id:
-            try:
-                self.main_window.root.after_cancel(self._auto_save_timer_id)
-            except Exception as e:
-                logger.debug(f"取消自动保存定时器失败: {e}")
+            self.main_window.root.after_cancel(self._auto_save_timer_id)
             self._auto_save_timer_id = None
 
-        # 删除当前临时文件（录音正常完成后不需要保留）
-        if self._current_tmp_file and self._current_tmp_file.exists():
-            try:
-                self._current_tmp_file.unlink()
-                logger.debug("自动保存临时文件已清理")
-            except Exception as e:
-                logger.debug(f"删除临时文件失败: {e}")
+    def _post_ui(self, callback, *args):
+        if not self._closed:
+            self._ui_events.put((callback, args))
 
-        self._current_tmp_file = None
+    def _poll_ui_events(self):
+        if self._closed:
+            return
+        for _ in range(100):
+            try:
+                callback, args = self._ui_events.get_nowait()
+            except Empty:
+                break
+            try:
+                callback(*args)
+            except Exception:
+                logger.exception('处理界面事件失败')
+            if self._closed:
+                return
+        if self._display_dirty.is_set():
+            self._display_dirty.clear()
+            self._update_gui_display()
+        self._flush_draft_save()
+        self._poll_playback()
+        self.main_window.root.after(50, self._poll_ui_events)
+
+    def _set_state(self, state):
+        if state == RecordingState.STOPPING and self._duration_timer_id:
+            self.main_window.root.after_cancel(self._duration_timer_id)
+            self._duration_timer_id = None
+        self.recording_state = state
+        self.is_recording = state in {RecordingState.RECORDING, RecordingState.RECONNECTING}
+        self.main_window.set_recording_state(state)
+        if state != RecordingState.PROCESSING:
+            self.main_window.workspace.show_processing(None)
+
+    def _on_transcriber_status(self, status):
+        if not self.recording_state.captures_audio or self.recording_state == RecordingState.PAUSED:
+            return
+        if status.startswith('asr_error:'):
+            message = status.split(':', 1)[1].strip()
+            self._set_state(RecordingState.RECONNECTING)
+            self.main_window.update_status(f'语音识别异常：{message}')
+            if not self._asr_error_notified:
+                self._asr_error_notified = True
+                import tkinter.messagebox as messagebox
+                messagebox.showwarning('语音识别异常', message)
+            return
+        if status == 'reconnecting':
+            self._set_state(RecordingState.RECONNECTING)
+        elif status == 'recording':
+            self._set_state(RecordingState.RECORDING)
+
+    def _on_start_complete(self, started, error):
+        if not started:
+            self._set_state(RecordingState.ERROR)
+            self._save_session(on_saved=self._finish_close if self._closing else None)
+            if not self._closing:
+                import tkinter.messagebox as messagebox
+                messagebox.showerror('启动失败', error or '无法启动录音，请检查麦克风与网络配置。')
+            return
+        self._set_state(RecordingState.RECORDING)
+        self._update_duration()
+        self._start_auto_save()
+        if self._closing:
+            self._on_stop_recording()
+
+    def _on_stop_complete(self, full_text):
+        self._stop_failed = False
+        with self._data_lock:
+            self.current_document.raw_text = (self.confirmed_text + self.current_partial).strip() or full_text.strip()
+            self.current_document.word_count = len(self.current_document.raw_text)
+            self.current_document.duration_seconds = self.transcriber.get_audio_duration()
+        self.main_window.update_duration(int(self.current_document.duration_seconds))
+        self.main_window.update_volume(0)
+        self._update_gui_display()
+        # 必须确认原文已经落盘，才允许进入后处理或退出。
+        self._save_session(on_saved=self._on_raw_saved, persisted_state=RecordingState.SAVED)
+
+    def _on_stop_error(self, error):
+        # 发送线程未退出时保持停止状态，禁止启动新会话；允许再次尝试停止。
+        self.main_window.update_status('停止未完成，正在保留会话，请重试')
+        self._save_session()
+        self._closing = False
+        self._stop_failed = True
+        self.main_window.stop_btn.configure(state='normal', command=self._retry_stop)
+        import tkinter.messagebox as messagebox
+        messagebox.showerror('停止未完成', error)
+
+    def _retry_stop(self):
+        self.main_window.stop_btn.configure(command=self.main_window._on_stop_click)
+        self._set_state(RecordingState.PAUSED)
+        self._on_stop_recording()
+
+    def _on_raw_saved(self):
+        if self._closing:
+            self._finish_close()
+            return
+        recorder = self.transcriber.recorder
+        if (recorder.dropped_chunks or recorder.write_dropped_chunks or recorder.write_error
+                or self.transcriber.failed_audio_bytes or self.transcriber.unsent_audio_bytes
+                or self._audio_copy_error):
+            import tkinter.messagebox as messagebox
+            messagebox.showwarning(
+                '录音存在异常',
+                '会话已保存。部分音频未完成转写、保存或输出复制，详情已记录。\n'
+                + ('请核查会话目录中的原始 WAV 录音。' if self._audio_path else '本次未启用原始音频保存。'),
+            )
+        self._set_state(RecordingState.PROCESSING)
+        try:
+            self._format_document()
+        except Exception as error:
+            self._on_format_error(error, None)
+
+    def _on_processing_saved(self):
+        self._set_state(RecordingState.SAVED)
+        self._show_document()
+        if self._closing:
+            self._finish_close()
+        else:
+            if self.current_document.processing_warnings:
+                self.main_window.update_status('会话已保存，部分 AI 整理未完成，请查看工作区的整理说明。')
+            else:
+                self._prompt_export()
+
+    def _session_snapshot(self):
+        with self._data_lock:
+            document = self.current_document.to_dict()
+            if self.recording_state.captures_audio or self.recording_state == RecordingState.STOPPING:
+                document['raw_text'] = (self.confirmed_text + self.current_partial).strip()
+                document['word_count'] = len(document['raw_text'])
+                if self.transcriber:
+                    document['duration_seconds'] = self.transcriber.get_audio_duration()
+            issues = getattr(self, '_recovered_audio_issues', {})
+            if self.transcriber:
+                recorder = self.transcriber.recorder
+                issues = {
+                    'network_dropped_chunks': recorder.dropped_chunks,
+                    'audio_dropped_chunks': recorder.write_dropped_chunks,
+                    'write_error': recorder.write_error,
+                    'failed_audio_bytes': self.transcriber.failed_audio_bytes,
+                    'unsent_audio_bytes': self.transcriber.unsent_audio_bytes,
+                    'gaps': copy.deepcopy(recorder.gaps),
+                    'sample_rate': recorder.config.sample_rate,
+                    'channels': recorder.config.channels,
+                }
+            return {
+                'version': 1, 'saved_at': datetime.now().isoformat(),
+                'state': self.recording_state.value, 'document': document,
+                'confirmed_text': self.confirmed_text, 'current_partial': self.current_partial,
+                'settings': dict(self._session_settings),
+                'behavior_config': self.behavior_config.to_dict() if self.behavior_config else None,
+                'audio_path': str(self._audio_path) if self._audio_path else None,
+                'audio_issues': issues, 'exported_paths': list(self._exported_paths),
+                'audio_copy_error': self._audio_copy_error,
+                'revisions': copy.deepcopy(self._revisions),
+            }
+
+    def _save_session(self, on_saved=None, persisted_state=None):
+        if not self.current_document:
+            if on_saved:
+                on_saved()
+            return
+        snapshot = self._session_snapshot()
+        self._draft_save_pending = False
+        if persisted_state:
+            snapshot['state'] = persisted_state.value
+        session_id = self.current_document.session_id
+        def save():
+            try:
+                self.session_store.save(snapshot)
+            except Exception as error:
+                self._post_ui(self._on_save_error, session_id, str(error), on_saved is not None)
+            else:
+                if on_saved:
+                    self._post_ui(on_saved)
+        self._save_future = self._storage.submit(save)
+
+    def _on_save_error(self, session_id, error, required):
+        if not self.current_document or self.current_document.session_id != session_id:
+            return
+        self.main_window.update_status('会话保存失败，请检查磁盘空间与权限')
+        logger.error(error)
+        if required:
+            self._closing = False
+            self._set_state(RecordingState.ERROR)
+            import tkinter.messagebox as messagebox
+            messagebox.showerror('会话保存失败', f'{error}\n原文仍在当前窗口，可以导出后再退出。')
+
+    def _on_close(self):
+        if self._closing:
+            return
+        if self._export_dialog and getattr(self._export_dialog, 'is_exporting', False) is True:
+            self.main_window.update_status('文档正在导出，请完成后再退出。')
+            self._export_dialog.window.lift()
+            return
+        self._capture_review(checkpoint=True)
+        self._closing = True
+        if self._format_context:
+            self._format_context.cancel()
+            self._format_token += 1
+            self._format_active = False
+        self._stop_playback()
+        self._stop_auto_save()
+        if self.recording_state.captures_audio:
+            self._on_stop_recording()
+        elif self.recording_state in {RecordingState.CONNECTING, RecordingState.STOPPING}:
+            if self._stop_failed:
+                self._retry_stop()
+            else:
+                self.main_window.update_status('正在结束录音并保存后退出…')
+        elif self.recording_state == RecordingState.PROCESSING:
+            # 原文已经持久保存，退出不必等待远程整理完成。
+            self._save_session(on_saved=self._finish_close)
+        else:
+            self._save_session(on_saved=self._finish_close)
+
+    def _finish_close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self.audio_player.close()
+        self._stop_auto_save()
+        if self._duration_timer_id:
+            self.main_window.root.after_cancel(self._duration_timer_id)
+        self._storage.shutdown(wait=False)
+        self.main_window.close()
+
+    def _show_document(self):
+        if self.current_document:
+            hint = None
+            issues = self._session_snapshot()['audio_issues']
+            if issues.get('audio_dropped_chunks') or issues.get('write_error'):
+                hint = '录音有保存缺口，片段定位可能偏移，请结合原文核查'
+            self.main_window.show_document(self.current_document, self._revisions, bool(self._audio_path), hint)
+
+    def _on_draft_changed(self, text):
+        if self.recording_state.busy or not self.current_document or not isinstance(text, str):
+            return
+        if text == self.current_document.formatted_text:
+            return
+        if not self._revisions:
+            self._revisions = add_revision([], self.current_document.formatted_text or self.current_document.raw_text, '初始整理稿')
+        self.current_document.formatted_text = text
+        self.current_document.draft_edited = True
+        self.current_document.word_count = len(text)
+        self._draft_dirty = True
+        self._draft_save_pending = True
+        self._flush_draft_save()
+        if self.current_document.behavior_matches:
+            warning = '行为分析基于原始整理文本；修改原文后建议重新整理以更新标记与频次。'
+            if warning not in self.current_document.processing_warnings:
+                self.current_document.processing_warnings.append(warning)
+            self.main_window.update_status('修订稿已保存；行为分析仍基于原始整理文本，如需更新请重新整理')
+        else:
+            self.main_window.update_status('修订稿正在自动保存；原始转录保留')
+
+    def _flush_draft_save(self):
+        if (self._draft_save_pending and not self._closing and not self.recording_state.busy
+                and (self._save_future is None or self._save_future.done())):
+            self._save_session()
+
+    def _capture_review(self, checkpoint=False):
+        if not self.current_document or self.recording_state.busy:
+            return
+        text = self.main_window.workspace.get_draft()
+        if not isinstance(text, str):
+            return
+        self.main_window.workspace.cancel_edit_timer()
+        self._on_draft_changed(text)
+        if checkpoint and (self._draft_dirty or not self._revisions
+                           or self._revisions[-1]['text'] != self.current_document.formatted_text):
+            self._revisions = add_revision(self._revisions, self.current_document.formatted_text,
+                                           '人工修订' if self._draft_dirty else '整理稿快照')
+            self._draft_dirty = False
+
+    def _commit_review(self):
+        if self.recording_state.busy or not self.current_document:
+            return
+        self._capture_review(checkpoint=True)
+        self.main_window.workspace.refresh_revisions(self._revisions)
+        session_id = self.current_document.session_id
+        def saved():
+            if self.current_document.session_id == session_id:
+                self.main_window.update_status('修订已保存，原始转录保留')
+        self._save_session(on_saved=saved)
+
+    def _restore_version(self, identity):
+        if self.recording_state.busy or not self.current_document:
+            return
+        revision = next((item for item in self._revisions if item['id'] == identity), None)
+        if not revision:
+            return
+        text = revision['text']
+        self._capture_review(checkpoint=True)
+        self.current_document.formatted_text = text
+        self.current_document.draft_edited = True
+        self.current_document.word_count = len(text)
+        self._revisions = add_revision(self._revisions, text, '恢复版本')
+        self._draft_dirty = False
+        self._save_session()
+        self._show_document()
+
+    def _rename_session(self, title):
+        if self.recording_state.busy or not self.current_document:
+            return
+        title = title.strip()
+        if not title or len(title) > 120:
+            self.main_window.update_status('标题请输入 1–120 个字符')
+            return
+        self.current_document.title = title
+        self._capture_review(checkpoint=True)
+        self._save_session()
+        self.main_window.update_status('标题已提交保存')
+
+    def _reprocess_document(self, force: bool = False):
+        if self.recording_state.busy or not self.current_document:
+            return
+        if self._format_worker and self._format_worker.is_alive():
+            self.main_window.update_status('上次 AI 请求仍在结束，请稍后重试整理。')
+            return
+        self._capture_review(checkpoint=True)
+        self._stop_playback()
+        self._set_state(RecordingState.PROCESSING)
+        self._save_session(on_saved=lambda: self._format_document(force=force))
+
+    def _reanalyze_document(self):
+        """强制重新调用模型，忽略可复用的上次分析。"""
+        self._reprocess_document(force=True)
+
+    def _open_history(self):
+        if self.recording_state.busy or self._closing:
+            return
+        previous_state = self.recording_state
+        self._capture_review(checkpoint=True)
+        self._set_state(RecordingState.PROCESSING)
+        self.main_window.update_status('正在读取会话历史…')
+        def load():
+            try:
+                rows = self.session_store.list_sessions()
+                self._post_ui(self._show_history, rows, previous_state)
+            except Exception as error:
+                self._post_ui(self._on_history_error, str(error))
+        if self.current_document:
+            self._save_session(on_saved=lambda: self._storage.submit(load))
+        else:
+            self._storage.submit(load)
+
+    def _show_history(self, rows, previous_state):
+        if self._closing:
+            self._save_session(on_saved=self._finish_close)
+            return
+        self._set_state(previous_state)
+        self._show_document()
+        SessionHistoryDialog(self.main_window.root, rows, self._open_session)
+
+    def _open_session(self, session_id):
+        if self.recording_state.busy or self._closing:
+            return
+        self._capture_review(checkpoint=True)
+        self._stop_playback()
+        self._set_state(RecordingState.PROCESSING)
+        def load():
+            try:
+                data = self.session_store.load(session_id)
+                self._post_ui(self._on_session_loaded, data)
+            except Exception as error:
+                self._post_ui(self._on_history_error, str(error))
+        if self.current_document:
+            self._save_session(on_saved=lambda: self._storage.submit(load))
+        else:
+            self._storage.submit(load)
+
+    def _on_session_loaded(self, data):
+        if self._closing:
+            self._save_session(on_saved=self._finish_close)
+            return
+        self._restore_unsaved_recording(data)
+
+    def _on_history_error(self, error):
+        self._set_state(RecordingState.ERROR)
+        self._show_document()
+        self.main_window.update_status(f'无法打开会话：{error}')
+        if self._closing:
+            self._save_session(on_saved=self._finish_close)
+
+    def _toggle_playback(self):
+        if self.recording_state.busy or not self.current_document or not self._audio_path:
+            return
+        if self.audio_player.state()['playing']:
+            self.audio_player.stop()
+        else:
+            duration = self.current_document.duration_seconds
+            if duration and self._playback_position >= duration:
+                self._playback_position = 0
+            self.audio_player.play(self._audio_path, self._playback_position)
+
+    def _stop_playback(self):
+        self.audio_player.stop(reset=True)
+        self._playback_position = 0
+        self._playback_error = None
+
+    def _seek_audio(self, seconds, play=False):
+        if self.recording_state.busy or not self.current_document:
+            return
+        if not self._audio_path:
+            self.main_window.update_status('此会话未保存原始音频，可查看片段文字')
+            return
+        resume = play or self.audio_player.state()['playing']
+        self.audio_player.stop(reset=True)
+        self._playback_position = min(max(0, seconds), self.current_document.duration_seconds)
+        if resume:
+            self.audio_player.play(self._audio_path, self._playback_position)
+
+    def _poll_playback(self):
+        if not self.current_document or self.recording_state.busy:
+            return
+        state = self.audio_player.state()
+        if state['playing']:
+            self._playback_position = state['position']
+        elif state['position'] > self._playback_position and state['duration']:
+            self._playback_position = state['position']
+        self.main_window.workspace.update_playback(state['playing'], self._playback_position, self.current_document.duration_seconds)
+        if state['error'] and state['error'] != self._playback_error:
+            self._playback_error = state['error']
+            self.main_window.update_status(f"无法回听录音：{state['error']}")
 
     def run(self):
         """运行应用程序"""

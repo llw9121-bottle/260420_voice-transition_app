@@ -7,9 +7,11 @@ DashScope 实时语音识别模块
 """
 
 import base64
+import struct
 import sys
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -22,7 +24,90 @@ if not getattr(sys, 'frozen', False):
 from dashscope.audio.qwen_omni import OmniRealtimeCallback, OmniRealtimeConversation, MultiModality
 from dashscope.audio.qwen_omni.omni_realtime import TranscriptionParams
 
+from config.settings import preview_asr_content, settings
+from utils.exceptions import DashScopeAPIException
 from utils.logger import logger
+from utils.proxy import bypass_proxy_for, should_fallback_to_direct
+
+
+def _install_tolerant_close_frame_parser() -> None:
+    """允许解析超过 RFC 上限的 close 帧。
+
+    DashScope 会把完整错误原因写进 close 帧，但长度常超过 125 字节。
+    websocket-client 会因此丢弃该帧，调用方只能看到 "Invalid close frame"。
+    这里仅放宽长度限制，close code 和 UTF-8 reason 仍然照常校验。
+    """
+    try:
+        from websocket import _abnf
+        from websocket._exceptions import WebSocketProtocolException
+    except Exception:
+        return
+    if not hasattr(_abnf.ABNF, '_is_valid_close_status'):
+        return
+    original = _abnf.ABNF.validate
+    if getattr(original, '_dashscope_long_close', False):
+        return
+
+    def validate(self, skip_utf8_validation: bool = False) -> None:
+        if self.opcode == _abnf.ABNF.OPCODE_CLOSE:
+            data = (self.data if isinstance(self.data, (bytes, bytearray))
+                    else (self.data or '').encode('utf-8'))
+            if len(data) > 125:
+                if len(data) < 2:
+                    raise WebSocketProtocolException('Invalid close frame.')
+                code = struct.unpack('!H', data[:2])[0]
+                if not self._is_valid_close_status(code):
+                    raise WebSocketProtocolException(f'Invalid close opcode {code!r}')
+                if len(data) > 2 and not skip_utf8_validation and not _abnf.validate_utf8(data[2:]):
+                    raise WebSocketProtocolException('Invalid close frame.')
+                return
+        original(self, skip_utf8_validation)
+
+    validate._dashscope_long_close = True  # type: ignore[attr-defined]
+    _abnf.ABNF.validate = validate
+
+
+def _describe_asr_close(code: Optional[int], message: Optional[str]) -> str:
+    """把 WebSocket 关闭信息转换为用户可理解的提示。"""
+    if isinstance(message, bytes):
+        raw = message.decode('utf-8', errors='replace').strip()[:500]
+    else:
+        raw = (message or '').strip()[:500]
+    lowered = raw.lower()
+    if 'free tier' in lowered or 'quota' in lowered:
+        return '语音识别服务失败：免费额度已耗尽。请在百炼控制台关闭“仅使用免费额度”模式，或充值后重试。'
+    if code in (401, 403, 4001):
+        return f'语音识别鉴权失败：{raw or "请检查 API Key 与业务空间配置。"}'
+    if code == 1007:
+        return f'语音识别服务拒绝了会话配置：{raw or "未知原因"}'
+    if code is None:
+        return '语音识别连接被服务端异常关闭（未返回原因）。常见原因：免费额度耗尽、API Key 权限不足或网络中断，请检查百炼控制台额度与 API 配置。'
+    return f'语音识别连接已断开（code={code}）：{raw or "未知原因"}'
+
+
+def _extract_transcript(response: dict) -> str:
+    """兼容不同版本服务端的文本字段（新版流式文本在 stash）。"""
+    for key in ('text', 'stash', 'transcript'):
+        value = response.get(key)
+        if value:
+            return value
+    content = response.get('content')
+    return content if isinstance(content, str) else ''
+
+
+def _describe_asr_connect_error(error: Exception) -> str:
+    """把连接失败转换为用户可理解的提示。"""
+    text = str(error)
+    name = type(error).__name__
+    if 'proxy' in text.lower() or 'proxy' in name.lower() or isinstance(error, ConnectionRefusedError):
+        return (
+            '无法通过系统代理连接语音识别服务。请检查代理/VPN 是否运行，'
+            '或在设置中关闭“使用系统代理”后重试。'
+        )
+    return f'无法连接语音识别服务：{error}'
+
+
+_install_tolerant_close_frame_parser()
 
 
 @dataclass
@@ -50,9 +135,9 @@ class ASRConfig:
     api_key: str = ""                       # API Key
     model: str = "qwen3-asr-flash-realtime"  # 模型名称
 
-    # WebSocket 配置
-    base_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-    region: str = "cn-beijing"
+    # WebSocket 配置（默认按地域/业务空间自动推导）
+    base_url: str = field(default_factory=lambda: settings.api.ws_base_url)
+    region: str = field(default_factory=lambda: settings.api.dashscope_region)
 
     # 音频配置
     sample_rate: int = 16000                # 采样率
@@ -111,6 +196,8 @@ class RealtimeASRCallback(OmniRealtimeCallback):
         self.conversation: Optional[OmniRealtimeConversation] = None
         self.is_connected = False
         self.session_id: Optional[str] = None
+        self._intentional_close = False
+        self._error_reported = False
 
         # 结果收集（当前会话）
         self.full_transcription = ""
@@ -133,10 +220,24 @@ class RealtimeASRCallback(OmniRealtimeCallback):
         self.is_connected = True
         self.session_start_time = time.time()
 
-    def on_close(self, code: int, msg: str):
+    def mark_intentional_close(self) -> None:
+        """标记主动关闭，避免把正常停止误报为异常。"""
+        self._intentional_close = True
+
+    def on_close(self, code: Optional[int], msg: Optional[str]):
         """WebSocket连接关闭"""
-        logger.info(f"[ASR] WebSocket连接已关闭, code: {code}, msg: {msg}")
         self.is_connected = False
+        if self._intentional_close:
+            logger.info(f"[ASR] WebSocket连接已关闭, code: {code}, msg: {msg}")
+            return
+        logger.warning(f"[ASR] WebSocket连接被服务端关闭, code: {code}, msg: {msg}")
+        if self.on_error and not self._error_reported:
+            self._error_reported = True
+            self.on_error(DashScopeAPIException(
+                _describe_asr_close(code, msg),
+                error_code='ASR_CONNECTION_CLOSED',
+                status_code=code if isinstance(code, int) else None,
+            ))
 
     def on_event(self, response: dict):
         """
@@ -152,7 +253,7 @@ class RealtimeASRCallback(OmniRealtimeCallback):
         """
         try:
             event_type = response.get('type', '')
-            logger.trace(f"[ASR] 收到事件: {event_type}, data: {str(response)[:200]}...")
+            logger.trace(f"[ASR] 收到事件: {event_type}")
 
             # 会话创建
             if event_type == 'session.created':
@@ -179,34 +280,22 @@ class RealtimeASRCallback(OmniRealtimeCallback):
                 if self.on_speech_stop:
                     self.on_speech_stop()
 
-            # 中间识别结果 - 尝试多个字段提取文本
+            # 中间识别结果：兼容 text/stash 字段
             elif event_type == 'conversation.item.input_audio_transcription.text':
-                text = response.get('text', '')
-                if not text and 'transcript' in response:
-                    text = response.get('transcript', '')
-                if not text and 'content' in response:
-                    content = response.get('content')
-                    if isinstance(content, str):
-                        text = content
+                text = _extract_transcript(response)
                 if text:
                     self.current_partial = text
-                    logger.debug(f"[ASR] 中间结果: {text}")
+                    logger.debug(f"[ASR] 中间结果: {preview_asr_content(text)}")
                     if self.on_partial:
                         self.on_partial(text)
 
-            # 最终识别结果 - 尝试多个字段提取文本
+            # 最终识别结果：兼容 transcript 字段
             elif event_type == 'conversation.item.input_audio_transcription.completed':
-                text = response.get('text', '')
-                if not text and 'transcript' in response:
-                    text = response.get('transcript', '')
-                if not text and 'content' in response:
-                    content = response.get('content')
-                    if isinstance(content, str):
-                        text = content
+                text = _extract_transcript(response)
                 if text:
                     self.full_transcription += text + " "
                     self.current_partial = ""
-                    logger.info(f"[ASR] 最终结果: {text}")
+                    logger.info(f"[ASR] 最终结果: {preview_asr_content(text)}")
                     if self.on_final:
                         self.on_final(text)
 
@@ -216,10 +305,15 @@ class RealtimeASRCallback(OmniRealtimeCallback):
 
             # 错误
             elif event_type == 'error':
-                error_msg = response.get('error', {}).get('message', 'Unknown error')
+                error = response.get('error', {})
+                error_msg = error.get('message', 'Unknown error')
                 logger.error(f"[ASR] 服务端错误: {error_msg}")
-                if self.on_error:
-                    self.on_error(Exception(error_msg))
+                if self.on_error and not self._error_reported:
+                    self._error_reported = True
+                    self.on_error(DashScopeAPIException(
+                        f'语音识别服务错误：{error_msg}',
+                        error_code=str(error.get('code') or 'ASR_SERVER_ERROR'),
+                    ))
 
             else:
                 logger.debug(f"[ASR] 未处理的事件类型: {event_type}")
@@ -275,9 +369,13 @@ class DashScopeASRClient:
         # 保存回调参数用于重连
         self._cached_callbacks: Optional[tuple] = None
 
+        # 最近一次连接失败原因
+        self.last_error: str = ''
+
         # 背景线程用于检查是否需要轮替
         self._rotate_check_thread: Optional[threading.Thread] = None
         self._stop_rotate_check = threading.Event()
+        self._cancel_reconnect = threading.Event()
 
         logger.info("[ASR] DashScopeASRClient 初始化完成")
 
@@ -300,11 +398,12 @@ class DashScopeASRClient:
         Returns:
             是否启动成功
         """
-        # 快速失败：优先验证API Key
+        # 启动前校验 API Key，避免建立无效连接。
         if not self.config.api_key or self.config.api_key.strip() == "":
             logger.error("[ASR] API Key未配置，请设置有效的DashScope API Key")
+            self.last_error = "API Key 未配置，请在设置中填写有效的 DashScope API Key。"
             if on_error:
-                on_error(ValueError("API Key未配置，请设置有效的DashScope API Key"))
+                on_error(ValueError(self.last_error))
             return False
 
         try:
@@ -313,6 +412,7 @@ class DashScopeASRClient:
             self._last_speech_end_time = None
             self._reconnect_count = 0
             self._stop_rotate_check.clear()
+            self._cancel_reconnect.clear()
 
             # 保存回调参数用于后续重连
             self._cached_callbacks_save(on_partial, on_final, on_speech_start, on_speech_stop, on_error)
@@ -340,6 +440,7 @@ class DashScopeASRClient:
         except Exception as e:
             logger.exception(f"[ASR] 启动失败: {e}")
             self.is_running = False
+            self.last_error = _describe_asr_connect_error(e)
             if on_error:
                 on_error(e)
             return False
@@ -355,44 +456,37 @@ class DashScopeASRClient:
         """创建新的会话"""
         with self._lock:
             try:
-                # 如果已有会话，先保存当前结果
+                if self._stop_rotate_check.is_set():
+                    return False
+                if self.conversation:
+                    if self.callback:
+                        self.callback.mark_intentional_close()
+                    self.conversation.close()
+                # 轮替前合并已有会话的文本。
                 if self.callback:
-                    # 保存当前会话的转录结果到总量
-                    # 包括 full_transcription（已完成句子）加上 current_partial（未完成的最后一句话）
+                    # 已完成句子与未完成句尾都要保留，避免轮替丢字。
                     accumulated = self.callback.full_transcription
                     if self.callback.current_partial:
                         accumulated += self.callback.current_partial + " "
+                        # 保留被轮替/重连中断的句尾，避免下一会话覆盖临时文字。
+                        if on_final:
+                            on_final(self.callback.current_partial)
+                        self.callback.current_partial = ''
                     self._full_transcription_total += accumulated
                     logger.info(f"[ASR] 会话轮替：累积 {len(self._full_transcription_total)} 字符")
 
-                # 创建回调处理器
-                # on_partial 不需要包装，直接传递，因为不影响累积
-                wrapped_on_final = self._wrap_final_callback(on_final)
-                wrapped_on_speech_start = self._wrap_speech_start(on_speech_start)
-                wrapped_on_speech_end = self._wrap_speech_end(on_speech_stop)
-
-                self.callback = RealtimeASRCallback(
-                    on_partial=on_partial,
-                    on_final=wrapped_on_final,
-                    on_speech_start=wrapped_on_speech_start,
-                    on_speech_stop=wrapped_on_speech_end,
-                    on_error=on_error
-                )
-
-                # 创建对话实例
-                self.conversation = OmniRealtimeConversation(
-                    model=self.config.model,
-                    callback=self.callback,
-                    url=self.config.base_url,
-                    api_key=self.config.api_key
-                )
-
-                # 注入 conversation 到 callback
+                # 创建回调与对话实例
+                self.callback = self._build_callback(
+                    on_partial, on_final, on_speech_start, on_speech_stop, on_error)
+                self.conversation = self._build_conversation(self.callback)
                 self.callback.set_conversation(self.conversation)
 
-                # 建立 WebSocket 连接
-                logger.info("[ASR] 正在连接 DashScope 实时语音识别服务...")
-                self.conversation.connect()
+                # 建立 WebSocket 连接（本机代理失效时自动直连重试）
+                self._connect_with_proxy_fallback(
+                    on_partial, on_final, on_speech_start, on_speech_stop, on_error)
+                if self._stop_rotate_check.is_set():
+                    self.conversation.close()
+                    return False
 
                 # 配置会话参数
                 transcription_params = TranscriptionParams(
@@ -416,7 +510,62 @@ class DashScopeASRClient:
 
             except Exception as e:
                 logger.exception(f"[ASR] 创建新会话失败: {e}")
+                self.last_error = _describe_asr_connect_error(e)
                 return False
+
+    def _build_callback(
+        self,
+        on_partial: Optional[Callable[[str], None]],
+        on_final: Optional[Callable[[str], None]],
+        on_speech_start: Optional[Callable],
+        on_speech_stop: Optional[Callable],
+        on_error: Optional[Callable[[Exception], None]],
+    ) -> RealtimeASRCallback:
+        """创建带包装的回调实例。"""
+        return RealtimeASRCallback(
+            on_partial=on_partial,
+            on_final=self._wrap_final_callback(on_final),
+            on_speech_start=self._wrap_speech_start(on_speech_start),
+            on_speech_stop=self._wrap_speech_end(on_speech_stop),
+            on_error=on_error,
+        )
+
+    def _build_conversation(self, callback: RealtimeASRCallback) -> OmniRealtimeConversation:
+        """创建对话实例。"""
+        return OmniRealtimeConversation(
+            model=self.config.model,
+            callback=callback,
+            url=self.config.base_url,
+            api_key=self.config.api_key,
+        )
+
+    def _connect_with_proxy_fallback(
+        self,
+        on_partial: Optional[Callable[[str], None]] = None,
+        on_final: Optional[Callable[[str], None]] = None,
+        on_speech_start: Optional[Callable] = None,
+        on_speech_stop: Optional[Callable] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+    ) -> None:
+        """建立连接；系统代理为本机且失效时，改用直连重试一次。"""
+        logger.info("[ASR] 正在连接 DashScope 实时语音识别服务...")
+        try:
+            self.conversation.connect()
+            return
+        except Exception as exc:
+            if not should_fallback_to_direct(self.config.base_url, settings.api.proxy_mode):
+                raise
+            logger.warning(f"[ASR] 系统代理不可用（{exc}），改用直连重试")
+            # 先标记主动关闭，避免旧连接延迟回调被误报为异常。
+            if self.callback:
+                self.callback.mark_intentional_close()
+            host = urllib.parse.urlparse(self.config.base_url).hostname or ''
+            with bypass_proxy_for([host]):
+                self.callback = self._build_callback(
+                    on_partial, on_final, on_speech_start, on_speech_stop, on_error)
+                self.conversation = self._build_conversation(self.callback)
+                self.callback.set_conversation(self.conversation)
+                self.conversation.connect()
 
     def _wrap_final_callback(self, on_final: Optional[Callable[[str], None]]) -> Optional[Callable[[str], None]]:
         """包装最终结果回调，保证原始回调被调用"""
@@ -424,7 +573,7 @@ class DashScopeASRClient:
             return None
 
         def wrapped(text: str):
-            # 调用原始回调，RealtimeTranscriber 会在这里累积
+            # 包装层只转发文本，累积由 RealtimeTranscriber 负责。
             on_final(text)
         return wrapped
 
@@ -462,7 +611,8 @@ class DashScopeASRClient:
     ):
         """背景循环检查是否需要轮替会话"""
         while not self._stop_rotate_check.is_set():
-            time.sleep(5)  # 每5秒检查一次
+            if self._stop_rotate_check.wait(5):
+                break
             if not self.is_running:
                 break
 
@@ -474,9 +624,8 @@ class DashScopeASRClient:
                 session_duration = self.callback.get_session_duration()
                 need_rotate = session_duration >= self.config.max_session_duration
 
-                # 如果在静音状态且超过时长，才轮替（避免打断说话）
+                # 超过时长后等待静音再轮替，避免打断说话。
                 if need_rotate and self.config.rotate_on_silence:
-                    # 只有当前不说话，并且已经静音一段时间，才轮替
                     if not self._is_speaking and self._last_speech_end_time:
                         silence_duration = time.time() - self._last_speech_end_time
                         if silence_duration > 2.0:  # 静音超过2秒才轮替
@@ -496,31 +645,39 @@ class DashScopeASRClient:
         on_error: Optional[Callable[[Exception], None]] = None
     ):
         """轮替会话：结束当前会话，创建新会话"""
+        if not self._reconnect_lock.acquire(blocking=False):
+            return
         try:
-            # 取出当前会话引用，在锁外关闭
-            conversation_to_close = None
-            with self._lock:
-                conversation_to_close = self.conversation
+            if self._stop_rotate_check.is_set():
+                return
+            try:
+                # 关闭连接可能阻塞，必须在锁外执行。
+                conversation_to_close = None
+                with self._lock:
+                    conversation_to_close = self.conversation
 
-            # 锁外执行阻塞操作
-            if conversation_to_close:
-                try:
-                    conversation_to_close.end_session(timeout=5)
-                except Exception as e:
-                    logger.debug(f"[ASR] 结束旧会话超时: {e}，继续关闭连接")
-                try:
-                    conversation_to_close.close()
-                except Exception as e:
-                    logger.debug(f"[ASR] 关闭旧连接出错: {e}")
+                if conversation_to_close:
+                    if self.callback:
+                        self.callback.mark_intentional_close()
+                    try:
+                        conversation_to_close.end_session(timeout=5)
+                    except Exception as e:
+                        logger.debug(f"[ASR] 结束旧会话超时: {e}，继续关闭连接")
+                    try:
+                        conversation_to_close.close()
+                    except Exception as e:
+                        logger.debug(f"[ASR] 关闭旧连接出错: {e}")
 
-            # 创建新会话（_create_new_session 内部会自己拿锁）
-            success = self._create_new_session(on_partial, on_final, on_speech_start, on_speech_stop, on_error)
-            if not success:
-                logger.error("[ASR] 会话轮替失败，新会话创建失败，请检查网络连接和API配置")
-        except Exception as e:
-            logger.exception(f"[ASR] 会话轮替出错: {e}")
-            if on_error:
-                on_error(e)
+                # 创建新会话（_create_new_session 内部会自己拿锁）
+                success = self._create_new_session(on_partial, on_final, on_speech_start, on_speech_stop, on_error)
+                if not success:
+                    logger.error("[ASR] 会话轮替失败，新会话创建失败，请检查网络连接和API配置")
+            except Exception as e:
+                logger.exception(f"[ASR] 会话轮替出错: {e}")
+                if on_error:
+                    on_error(e)
+        finally:
+            self._reconnect_lock.release()
 
     def send_audio(self, audio_data: bytes) -> bool:
         """
@@ -579,6 +736,8 @@ class DashScopeASRClient:
             return False
 
         try:
+            if self._cancel_reconnect.is_set():
+                return False
             # 检查是否超过最大重连次数
             if self._reconnect_count >= self.config.max_reconnect_attempts:
                 logger.error(f"[ASR] 已达到最大重连次数 {self.config.max_reconnect_attempts}，停止重连")
@@ -590,7 +749,8 @@ class DashScopeASRClient:
             delay = self.config.reconnect_delay * (2 ** (attempt - 1))  # 指数退避
 
             logger.warning(f"[ASR] 尝试第 {attempt}/{self.config.max_reconnect_attempts} 次重连，等待 {delay:.1f} 秒")
-            time.sleep(delay)
+            if self._cancel_reconnect.wait(delay):
+                return False
 
             # 使用缓存的回调创建新会话
             if not self._cached_callbacks:
@@ -617,6 +777,20 @@ class DashScopeASRClient:
         """保存回调参数用于重连"""
         self._cached_callbacks = (on_partial, on_final, on_speech_start, on_speech_stop, on_error)
 
+    def cancel_reconnect(self):
+        """停止时取消退避等待，仍允许发送已缓冲的音频。"""
+        self._cancel_reconnect.set()
+
+    def interrupt(self):
+        """强制打断阻塞的网络发送，仅用于停止收尾超时。"""
+        self._cancel_reconnect.set()
+        self._stop_rotate_check.set()
+        conversation = self.conversation
+        if conversation:
+            if self.callback:
+                self.callback.mark_intentional_close()
+            conversation.close()
+
     def stop(self, timeout: int = 5) -> bool:
         """
         停止实时语音识别
@@ -629,34 +803,28 @@ class DashScopeASRClient:
         Returns:
             是否停止成功
         """
-        if not self.is_running:
+        if not self.is_running and not self.conversation:
             logger.warning("[ASR] 客户端未运行")
             return True
 
         try:
             # 停止轮替检查线程（短超时，不需要等太久）
             self._stop_rotate_check.set()
-            if self._rotate_check_thread and self._rotate_check_thread.is_alive():
-                self._rotate_check_thread.join(timeout=0.5)
+            self._cancel_reconnect.set()
+            if (self._rotate_check_thread and self._rotate_check_thread.is_alive()
+                    and self._rotate_check_thread is not threading.current_thread()):
+                self._rotate_check_thread.join()
 
             logger.info("[ASR] 正在停止实时语音识别...")
 
-            # 先保存最后一个会话的文本累积（需要锁保护）
+            # 在锁内读取会话引用，在锁外关闭连接。
             conversation_to_close = None
             with self._lock:
-                # 将最后一个会话的结果合并到总量
-                if self.callback:
-                    # 包括 full_transcription（已完成句子）加上 current_partial（未完成的最后一句话）
-                    accumulated = self.callback.full_transcription
-                    if self.callback.current_partial:
-                        accumulated += self.callback.current_partial
-                    self._full_transcription_total += accumulated
-
-                # 取出 conversation 引用，之后在锁外关闭
                 conversation_to_close = self.conversation
 
-            # 锁外执行阻塞操作，避免长时间持有锁导致其他线程卡住
             if conversation_to_close:
+                if self.callback:
+                    self.callback.mark_intentional_close()
                 # 尝试优雅结束会话，但即使超时也要继续关闭连接
                 # end_session 可能会阻塞（等待服务端响应），必须放在锁外
                 try:
@@ -672,7 +840,10 @@ class DashScopeASRClient:
             with self._lock:
                 self.is_running = False
                 # 清空所有缓存引用，帮助垃圾回收
-                self._full_transcription_total = ""
+                # 优雅结束后再合并，包含结束过程中到达的最终结果。
+                if self.callback:
+                    self._full_transcription_total += self.callback.full_transcription
+                    self._full_transcription_total += self.callback.current_partial
                 self.conversation = None
                 self.callback = None
                 self._cached_callbacks = None
@@ -686,7 +857,6 @@ class DashScopeASRClient:
             self.is_running = False
             # 即使失败也要清空引用
             with self._lock:
-                self._full_transcription_total = ""
                 self.conversation = None
                 self.callback = None
                 self._cached_callbacks = None
@@ -703,7 +873,7 @@ class DashScopeASRClient:
             if self.callback:
                 # 加上已完成句子
                 total += self.callback.full_transcription
-                # 加上未完成的最后一句话（current_partial），避免丢失
+                # 合并未完成句尾，避免停止时丢失最后一段文本。
                 if self.callback.current_partial:
                     total += self.callback.current_partial
             return total.strip()

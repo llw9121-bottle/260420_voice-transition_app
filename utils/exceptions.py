@@ -42,6 +42,13 @@ class APIException(AppException):
     pass
 
 
+class ProcessingCancelled(AppException):
+    """用户取消整理，不应作为 API 失败触发回退。"""
+
+    def __init__(self):
+        super().__init__('整理已取消', 'PROCESSING_CANCELLED')
+
+
 class DashScopeAPIException(APIException):
     """
     DashScope API 调用异常

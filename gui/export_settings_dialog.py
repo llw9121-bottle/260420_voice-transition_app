@@ -6,13 +6,10 @@
 - 默认输出目录
 """
 
-import sys
 import customtkinter as ctk
 from tkinter import filedialog
-from pathlib import Path
-from typing import Optional
 
-from config.settings import settings
+from config.settings import save_output_directory, settings
 from gui.theme import AppColors, AppFonts
 from utils.logger import logger
 
@@ -180,8 +177,10 @@ class ExportSettingsDialog:
             messagebox.showwarning("输入错误", "输出目录不能为空")
             return
 
-        # 保存到 .env 文件
-        self._save_to_env(output_dir)
+        if not save_output_directory(output_dir):
+            from tkinter import messagebox
+            messagebox.showerror("保存失败", "无法写入 .env 文件，请检查目录权限后重试。")
+            return
 
         logger.info(f"导出设置已保存: 默认输出目录 = {output_dir}")
 
@@ -192,35 +191,6 @@ class ExportSettingsDialog:
         )
 
         self.window.destroy()
-
-    def _save_to_env(self, output_dir: str):
-        """保存设置到 .env 文件
-
-        Args:
-            output_dir: 输出目录
-        """
-        env_path = Path(__file__).parent.parent / ".env"
-
-        if env_path.exists():
-            # 读取现有文件
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-            found = False
-            new_lines = []
-
-            for line in lines:
-                if line.strip().startswith("OUTPUT_DIR="):
-                    new_lines.append(f"OUTPUT_DIR={output_dir}")
-                    found = True
-                else:
-                    new_lines.append(line)
-
-            if not found:
-                new_lines.append(f"OUTPUT_DIR={output_dir}")
-
-            env_path.write_text("\n".join(new_lines), encoding="utf-8")
-        else:
-            # 创建新文件
-            env_path.write_text(f"OUTPUT_DIR={output_dir}\n", encoding="utf-8")
 
 
 # 测试代码

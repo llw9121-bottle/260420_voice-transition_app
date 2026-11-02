@@ -14,8 +14,11 @@ if not getattr(sys, 'frozen', False):
     sys.path.insert(0, str(project_root))
 
 import threading
+import shutil
+import tempfile
+import wave
 from dataclasses import dataclass
-from queue import Queue
+from queue import Empty, Full, Queue
 from typing import Callable, List, Optional
 
 import numpy as np
@@ -35,6 +38,12 @@ class AudioDevice:
 
 
 @dataclass
+class AudioChunk:
+    data: bytes
+    start_byte: int
+
+
+@dataclass
 class AudioConfig:
     """音频配置参数"""
     sample_rate: int = 16000       # 采样率(Hz)
@@ -42,10 +51,14 @@ class AudioConfig:
     chunk_size: int = 1024         # 音频块大小
     format: int = None             # 音频格式
     save_audio: bool = True        # 是否保存完整音频数据（用于保存WAV文件）
+    queue_seconds: float = 30.0   # 网络缓冲上限，避免断网时内存持续增长
+    writer_queue_seconds: float = 5.0
 
     def __post_init__(self):
         if self.format is None:
             self.format = pyaudio.paInt16  # 16bit PCM
+        if self.queue_seconds <= 0 or self.writer_queue_seconds <= 0:
+            raise ValueError('音频缓冲时长必须大于零')
 
 
 class AudioRecorder:
@@ -59,7 +72,7 @@ class AudioRecorder:
     4. 录制状态管理
     """
     
-    def __init__(self, config: Optional[AudioConfig] = None):
+    def __init__(self, config: Optional[AudioConfig] = None, audio_path: Optional[Path] = None):
         """
         初始化音频录制器
         
@@ -77,7 +90,19 @@ class AudioRecorder:
         self.record_thread: Optional[threading.Thread] = None
 
         # 音频数据队列（用于实时输出）
-        self.audio_queue: Queue = Queue()
+        self.audio_queue: Queue = Queue(maxsize=self._queue_capacity(self.config.queue_seconds))
+        self._writer_queue: Queue = Queue(maxsize=self._queue_capacity(self.config.writer_queue_seconds))
+        self._writer_thread = None
+        self._callback_thread = None
+        self._capture_done = threading.Event()
+        self._writer_ready = threading.Event()
+        self.audio_path = Path(audio_path) if audio_path else None
+        self.write_error: Optional[str] = None
+        self.captured_bytes = 0
+        self.saved_bytes = 0
+        self.dropped_chunks = 0
+        self.write_dropped_chunks = 0
+        self.gaps: list[dict] = []
 
         # 回调函数
         self.on_audio_callback: Optional[Callable[[bytes], None]] = None
@@ -90,6 +115,52 @@ class AudioRecorder:
         self._max_rms: float = 0.0
 
         logger.info("音频录制器初始化完成")
+
+    def _queue_capacity(self, seconds: float) -> int:
+        return max(1, int(seconds * self.config.sample_rate / self.config.chunk_size))
+
+    def _record_gap(self, reason: str, start: int, size: int) -> None:
+        """相邻缺口合并，保留音频偏移供后续核查。"""
+        if self.gaps and self.gaps[-1]['reason'] == reason and self.gaps[-1]['end_byte'] == start:
+            self.gaps[-1]['end_byte'] += size
+        else:
+            self.gaps.append({'reason': reason, 'start_byte': start, 'end_byte': start + size})
+
+    def _write_audio(self) -> None:
+        try:
+            self.audio_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.audio_path, 'wb') as output:
+                with wave.open(output, 'wb') as wav:
+                    wav.setnchannels(self.config.channels)
+                    wav.setsampwidth(self.audio.get_sample_size(self.config.format))
+                    wav.setframerate(self.config.sample_rate)
+                    wav.writeframes(b'')
+                    output.flush()
+                    self._writer_ready.set()
+                    while not self._capture_done.is_set() or not self._writer_queue.empty():
+                        try:
+                            data = self._writer_queue.get(timeout=0.1)
+                        except Empty:
+                            continue
+                        # 每块更新 WAV 头并刷新，进程异常退出后文件仍可读取。
+                        wav.writeframes(data)
+                        output.flush()
+                        self.saved_bytes += len(data)
+        except Exception as error:
+            self.write_error = str(error)
+            logger.error(f'音频写入失败: {error}')
+        finally:
+            self._writer_ready.set()
+
+    def _dispatch_audio(self) -> None:
+        """兼容回调接口，用户回调始终在工作线程运行。"""
+        while not self._capture_done.is_set() or not self.audio_queue.empty():
+            data = self.get_audio_data()
+            if data is not None and self.on_audio_callback:
+                try:
+                    self.on_audio_callback(data)
+                except Exception as error:
+                    logger.error(f'音频处理回调失败: {error}')
     
     def list_devices(self) -> List[AudioDevice]:
         """
@@ -194,6 +265,27 @@ class AudioRecorder:
         try:
             # 设置回调
             self.on_audio_callback = on_audio
+            self.clear_audio_queue()
+            while not self._writer_queue.empty():
+                self._writer_queue.get_nowait()
+            self.captured_bytes = self.saved_bytes = 0
+            self.dropped_chunks = self.write_dropped_chunks = 0
+            self.gaps = []
+            self.write_error = None
+            self._capture_done.clear()
+            self._writer_ready.clear()
+            if self.config.save_audio:
+                if self.audio_path is None:
+                    from config.settings import project_root
+                    directory = project_root / '.tmp'
+                    directory.mkdir(parents=True, exist_ok=True)
+                    with tempfile.NamedTemporaryFile(dir=directory, suffix='.wav', delete=False) as handle:
+                        self.audio_path = Path(handle.name)
+                self._writer_thread = threading.Thread(target=self._write_audio, name='audio-writer', daemon=True)
+                self._writer_thread.start()
+                self._writer_ready.wait()
+                if self.write_error:
+                    raise AudioStreamException(self.write_error)
             
             # 选择设备
             if device_index is not None:
@@ -211,15 +303,18 @@ class AudioRecorder:
                 input=True,
                 input_device_index=self.device_index,
                 frames_per_buffer=self.config.chunk_size,
-                stream_callback=self._stream_callback
+                stream_callback=self._stream_callback,
+                start=False,
             )
             
             self.is_recording = True
             self.is_paused = False
-            # 清空之前的录制数据
             self.recorded_frames.clear()
-            # 重置音量电平统计
             self.reset_volume_level()
+            if on_audio:
+                self._callback_thread = threading.Thread(target=self._dispatch_audio, name='audio-callback', daemon=True)
+                self._callback_thread.start()
+            self.stream.start_stream()
             logger.info(
                 f"开始录音: {self.config.sample_rate}Hz, "
                 f"{self.config.channels}通道, 设备索引: {self.device_index}"
@@ -243,22 +338,22 @@ class AudioRecorder:
         每当有新的音频数据块可用时被调用。
         """
         if in_data and self.is_recording and not self.is_paused:
-            # 放入队列
-            self.audio_queue.put(in_data)
+            start = self.captured_bytes
+            self.captured_bytes += len(in_data)
+            try:
+                self.audio_queue.put_nowait(AudioChunk(in_data, start))
+            except Full:
+                self.dropped_chunks += 1
+                self._record_gap('network_buffer_full', start, len(in_data))
 
-            # 累积音频数据（用于保存到文件），仅在启用保存时
             if self.config.save_audio:
-                self.recorded_frames.append(in_data)
-
-            # 计算当前音量电平（用于可视化）
-            self._update_volume_level(in_data)
-
-            # 调用用户回调
-            if self.on_audio_callback:
                 try:
-                    self.on_audio_callback(in_data)
-                except Exception as e:
-                    logger.error(f"音频回调函数执行失败: {e}")
+                    self._writer_queue.put_nowait(in_data)
+                except Full:
+                    self.write_dropped_chunks += 1
+                    self._record_gap('audio_writer_full', start, len(in_data))
+
+            self._update_volume_level(in_data)
 
         # 返回继续录制（即使暂停也保持流打开）
         return (in_data, pyaudio.paContinue)
@@ -304,10 +399,6 @@ class AudioRecorder:
 
         停止音频流并释放资源。
         """
-        if not self.is_recording:
-            logger.debug("录音未在进行中，无需停止")
-            return
-
         logger.info("停止录音")
         self.is_recording = False
         self.is_paused = False
@@ -325,11 +416,12 @@ class AudioRecorder:
                 logger.debug(f"关闭音频流时出错: {e}")
             finally:
                 self.stream = None
-
-        # 清空音频数据，释放内存
-        self.recorded_frames.clear()
-        # 清空队列
-        self.clear_audio_queue()
+        self.is_recording = False
+        self._capture_done.set()
+        # 停止采集后排空写盘队列，网络队列交给转录发送线程收尾。
+        for worker in (self._writer_thread, self._callback_thread):
+            if worker and worker is not threading.current_thread():
+                worker.join()
 
         logger.debug("音频资源已清理")
     
@@ -343,10 +435,15 @@ class AudioRecorder:
         Returns:
             音频数据字节，超时返回None
         """
+        chunk = self.get_audio_chunk(timeout)
+        return chunk.data if chunk else None
+
+    def get_audio_chunk(self, timeout: float = 0.1) -> Optional[AudioChunk]:
+        """附带采集位置，避免网络积压把回听定位推到录音尾部。"""
         try:
-            return self.audio_queue.get(timeout=timeout)
-        except Exception as e:
-            logger.debug(f"获取音频数据超时: {e}")
+            chunk = self.audio_queue.get(timeout=timeout)
+            return chunk if isinstance(chunk, AudioChunk) else AudioChunk(chunk, 0)
+        except Empty:
             return None
     
     def get_audio_queue_size(self) -> int:
@@ -388,9 +485,10 @@ class AudioRecorder:
         Returns:
             所有录制帧拼接后的完整字节数据
         """
-        if not self.recorded_frames:
-            return b""
-        return b"".join(self.recorded_frames)
+        if self.audio_path and self.audio_path.exists():
+            with wave.open(str(self.audio_path), 'rb') as wav:
+                return wav.readframes(wav.getnframes())
+        return b''
 
     def get_total_bytes(self) -> int:
         """
@@ -399,7 +497,7 @@ class AudioRecorder:
         Returns:
             总字节数
         """
-        return sum(len(frame) for frame in self.recorded_frames)
+        return self.captured_bytes
 
     def get_duration(self) -> float:
         """
@@ -420,22 +518,14 @@ class AudioRecorder:
         Args:
             output_path: 输出文件路径
         """
-        import wave
-
-        # 确保输出目录存在
+        if not self.config.save_audio or not self.audio_path or not self.audio_path.exists():
+            raise AudioStreamException('本次录音未保存原始音频')
+        if self.write_error or self.write_dropped_chunks:
+            raise AudioStreamException(f'音频保存不完整: {self.write_error or "写盘缓冲已满"}')
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # 获取完整音频数据
-        audio_data = self.get_recorded_data()
-
-        # 创建 WAV 文件
-        with wave.open(str(output_path), 'wb') as wf:
-            wf.setnchannels(self.config.channels)
-            wf.setsampwidth(self.audio.get_sample_size(self.config.format))
-            wf.setframerate(self.config.sample_rate)
-            wf.writeframes(audio_data)
-
-        logger.info(f"原始录音已保存: {output_path} ({len(audio_data)} bytes)")
+        if output_path.resolve() != self.audio_path.resolve():
+            shutil.copyfile(self.audio_path, output_path)
+        logger.info(f'原始录音已保存: {output_path} ({self.saved_bytes} bytes)')
 
     def _update_volume_level(self, audio_bytes: bytes) -> None:
         """
@@ -465,15 +555,12 @@ class AudioRecorder:
         Returns:
             归一化音量，0 表示静音，1 表示最大音量
         """
-        # int16 音频的理论最大 RMS 就是 32768，直接用这个作为基准
-        # 不依赖动态 _max_rms 避免灵敏度随录音进程逐渐降低
+        # 固定以 int16 理论峰值作为基准，避免灵敏度随录音进程漂移。
         max_rms = 32768.0
         if self._current_rms <= 0:
             return 0.0
-        # 归一化
         normalized = min(1.0, self._current_rms / max_rms)
-        # 使用平方根缩放，比对数更灵敏，小音量也有明显变化
-        # 同时保留一定的压缩，避免大音量溢出
+        # 平方根缩放让小音量更明显，同时保留动态范围。
         if normalized > 0:
             return np.sqrt(normalized)
         return 0.0
@@ -489,7 +576,8 @@ class AudioRecorder:
 
     def __del__(self):
         """析构时清理资源"""
-        self._cleanup()
+        if hasattr(self, '_capture_done'):
+            self._cleanup()
         if hasattr(self, 'audio') and self.audio:
             try:
                 self.audio.terminate()

@@ -139,16 +139,13 @@ class NamingStrategy:
         return result
     
     def _get_template(self) -> NamingTemplate:
-        """获取模板"""
-        # 首先检查自定义模板
+        """获取模板：自定义 > 内置 > 模板字符串 > 时间戳。"""
         if self.template_str in self.custom_templates:
             return self.custom_templates[self.template_str]
-        
-        # 检查默认模板
+
         if self.template_str in self.DEFAULT_TEMPLATES:
             return self.DEFAULT_TEMPLATES[self.template_str]
-        
-        # 尝试作为自定义模板字符串
+
         custom = NamingTemplate(
             name="custom",
             template=self.template_str
@@ -156,8 +153,7 @@ class NamingStrategy:
         is_valid, _ = custom.validate()
         if is_valid:
             return custom
-        
-        # 默认使用时间戳
+
         return self.DEFAULT_TEMPLATES["timestamp"]
     
     @staticmethod
@@ -187,11 +183,15 @@ class NamingStrategy:
         
         # 限制长度
         if len(result) > 200:
-            result = result[:200]
+            result = result[:200].rstrip('. ')
         
         # 确保不为空
         if not result:
             result = "unnamed"
+        reserved = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)),
+                    *(f'LPT{i}' for i in range(1, 10))}
+        if result.split('.')[0].upper() in reserved:
+            result = '_' + result
         
         return result
 
