@@ -86,3 +86,8 @@ Desktop.ini
 *.bak
 *.orig
 *.rej
+
+# Local ASR build artifacts
+/models/
+/model-cache/
+/staging/

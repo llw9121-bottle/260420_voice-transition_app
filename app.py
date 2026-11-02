@@ -52,10 +52,37 @@ from core.formatter.behavior_matcher import (
 )
 
 
+def _local_asr_self_check() -> int:
+    """本地版构建自检：加载模型后立即释放，不录音。
+
+    用 `VoiceTranscriptionLocal.exe --check-local-asr` 运行；
+    退出码 0 表示模型与原生 DLL 均可用，结果同时写入 logs/。
+    """
+    from types import SimpleNamespace
+
+    from api.local_asr import LocalASRClient
+    from config.settings import get_local_asr_model_dir, settings
+
+    config = SimpleNamespace(
+        sample_rate=settings.audio.sample_rate,
+        language=settings.asr.language,
+        vad_silence_ms=settings.asr.vad_silence_ms,
+        max_session_duration=1200,
+    )
+    client = LocalASRClient(config, model_dir=get_local_asr_model_dir())
+    started = client.start()
+    client.stop()
+    if started:
+        logger.info('本地 ASR 自检通过')
+        return 0
+    logger.error(f'本地 ASR 自检失败：{client.last_error}')
+    return 1
+
+
 class VoiceTranscriptionApp:
     """
     语音实时转录应用程序
-    
+
     集成实时转录、格式化、GUI 的完整应用。
     """
     
@@ -448,6 +475,11 @@ class VoiceTranscriptionApp:
         # 显示错误
         import tkinter.messagebox as messagebox
         message = getattr(error, 'message', str(error))
+        if message == "API Key未设置" and settings.asr.provider == "local":
+            message = (
+                "未配置百炼 API Key，AI 整理不可用；本地转写和原始文稿不受影响。\n"
+                "请在设置中填写 BAILIAN_API_KEY 后重试。"
+            )
         messagebox.showerror(
             "格式化失败",
             f"文档格式化过程中发生错误:\n\n{message}\n\n请检查网络连接和 API Key 配置后重试。"
@@ -549,8 +581,8 @@ class VoiceTranscriptionApp:
         from config.settings import check_api_configuration, settings
         status = check_api_configuration()
 
-        if not status["dashscope_configured"]:
-            # DashScope API Key 未配置，弹出配置对话框
+        # 本地版不需要 DashScope Key；云端版语义不变。
+        if not status["asr_configured"]:
             def show_config_dialog():
                 from gui.api_settings_dialog import APISettingsDialog
                 # 获取当前已有的值（可能为空）
@@ -565,12 +597,13 @@ class VoiceTranscriptionApp:
                     initial_workspace=settings.api.dashscope_workspace_id,
                     initial_proxy_mode=settings.api.proxy_mode,
                     initial_proxy_url=settings.api.proxy_url,
-                    is_first_launch=True
+                    is_first_launch=True,
+                    dashscope_optional=(status.get("asr_provider") == "local"),
                 )
 
             # 在主窗口加载后显示对话框
             self.main_window.root.after(500, show_config_dialog)
-            logger.warning("DashScope API Key 未配置，弹出配置对话框")
+            logger.warning("ASR 未配置，弹出配置对话框")
 
     def _check_unsaved_recording(self):
         # 在磁盘线程加载快照；兼容旧版 .tmp 恢复文件。
@@ -1085,5 +1118,7 @@ class VoiceTranscriptionApp:
         
 
 if __name__ == "__main__":
+    if '--check-local-asr' in sys.argv:
+        raise SystemExit(_local_asr_self_check())
     app = VoiceTranscriptionApp()
     app.run()

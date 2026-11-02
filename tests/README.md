@@ -51,6 +51,8 @@ pytest tests/ -v -s
 | `test_review_workspace.py` | 原生编辑、撤销、搜索、对照、窄屏布局与历史界面 | 否 | 否（需可用 Tk） |
 | `test_export_workflow.py` | 后台导出、覆盖检查、原子替换失败、保留文件名与整理说明导出 | 否 | 否 |
 | `test_processing.py` | 分块进度与取消、降级提示、响应校验、长文引文偏移 | 否 | 否（使用 mock） |
+| `test_local_asr.py` | 本地流式客户端：模型校验、语言限制、partial/final 顺序、停止幂等与限时 | 否 | 否（使用 fake sherpa） |
+| `test_local_config.py` | provider/flavor 解析、模型目录、启动门禁、可选 DashScope Key、客户端工厂 | 否 | 否 |
 
 第二轮回归还覆盖草稿保存后切换会话、导出前收集编辑、重整版本保留、过期结果隔离、句级估计时间及旧快照兼容。
 

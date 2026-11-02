@@ -36,6 +36,69 @@ dist/
 
 ---
 
+## Windows 本地 ASR 版打包
+
+本地版与云端版共用同一份源码，但使用独立的 spec、依赖和发布资产。**云端 `app.spec` 保持不变。**
+
+### 1. 安装依赖
+
+```bash
+pip install -r requirements-local.txt
+pip install pyinstaller==6.22.3
+```
+
+### 2. 下载并校验模型
+
+```bash
+python scripts/fetch_local_model.py --dest model-cache/models/asr
+```
+
+默认从模型镜像逐个下载 `encoder.int8.onnx`、`decoder.int8.onnx`、`tokens.txt`（约 237MB），每个文件都按脚本内固定的 SHA256 校验，并生成 `MANIFEST.txt`。
+
+如需从官方归档构建，可使用归档模式：
+
+```bash
+python scripts/fetch_local_model.py \
+  --url https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2 \
+  --sha256 <ARCHIVE_SHA256> \
+  --dest model-cache/models/asr \
+  --cache-dir model-cache
+```
+
+### 3. 打包
+
+```bash
+pyinstaller app-local.spec --noconfirm --clean
+```
+
+产物：`dist/VoiceTranscriptionLocal.exe`（one-file）。
+
+### 4. 组装 zip
+
+```text
+VoiceTranscription-Windows-Local.zip
+├── VoiceTranscriptionLocal.exe
+├── models/asr/{encoder.int8.onnx,decoder.int8.onnx,tokens.txt,MANIFEST.txt}
+├── README-LOCAL.txt
+├── THIRD_PARTY_NOTICES.txt
+└── LOCAL_BUILD_INFO.txt
+```
+
+`models/` 必须与 exe 位于同一目录。模型**不能**放进 PyInstaller `datas`，否则 one-file 每次启动都会把数百 MB 解压到临时目录。
+
+### 5. CI
+
+`.github/workflows/build-local.yml` 仅手动触发（`workflow_dispatch`），默认 `upload=false` 只产出 artifact；确认无误后改为 `upload=true`，通过 `gh release upload --clobber` 追加到 v2.0 Release，不修改标题、正文和 tag。
+
+### 6. 验收
+
+- 完整解压后断网运行，无需任何 Key 即可转写；
+- 运行 `VoiceTranscriptionLocal.exe --check-local-asr`，退出码应为 0；
+- 把 `models` 改名后，启动提示应包含模型路径和修复方法；
+- 未配置百炼 Key 时，AI 整理提示清晰，转写不受影响。
+
+---
+
 ## 👤 Windows 用户端 - 绿色安装使用说明
 
 ### 系统要求
@@ -187,14 +250,17 @@ A: 可以。在 Apple Silicon 机器上打包会生成原生 arm64 版本；在 
 
 - `console=False`: 不显示终端窗口，只显示GUI
 - `upx=True`: 使用 UPX 压缩减小体积（需要提前安装 UPX）
+- `upx=False`: 本地 ASR 版关闭 UPX，避免破坏 onnxruntime / sherpa-onnx 原生 DLL
 - `hiddenimports`: 列出 PyInstaller 可能找不到的依赖
+- `runtime_hooks`: 本地版用于固定 `ASR_PROVIDER=local` 并补充 DLL 搜索路径
 - macOS: 使用 `BUNDLE` 生成标准 .app 应用包
 
 ### 体积参考
 
 | 平台 | 打包后大小（单文件） | 说明 |
 |------|---------------------|------|
-| Windows | 约 45 MB | 当前 `app.spec` one-file 构建，UPX 压缩后 |
+| Windows（云端版） | 约 45 MB | 当前 `app.spec` one-file 构建，UPX 压缩后 |
+| Windows（本地 ASR 版） | 约 75 MB + 约 230 MB 模型 | `app-local.spec`；模型与 exe 同级，不进临时目录 |
 | macOS | 约 50-80 MB | 视运行器架构和依赖版本而定 |
 
 ### 测试打包结果

@@ -1,0 +1,109 @@
+# 本地 ASR 版自动构建（Windows）
+# 只手动触发，不会在推送标签时自动运行，避免影响现有云端发布流程。
+
+name: Build Local ASR (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "现有 Release 标签（本地资产会追加到该 Release）"
+        required: true
+        default: "v2.0"
+      upload:
+        description: "是否上传到 Release；false 仅产出 artifact"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-local-windows
+  cancel-in-progress: false
+
+jobs:
+  build-windows-local:
+    name: Build Windows (local ASR)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-local.txt
+          pip install pyinstaller==6.22.3
+
+      - name: Cache model files
+        uses: actions/cache@v4
+        with:
+          path: model-cache/models/asr
+          key: sherpa-paraformer-bilingual-zh-en-int8-v1
+
+      - name: Fetch and verify model
+        run: |
+          python scripts/fetch_local_model.py --dest model-cache/models/asr
+
+      - name: Build one-file exe
+        run: pyinstaller app-local.spec --noconfirm --clean
+
+      - name: Assemble local package
+        run: |
+          if (-not (Test-Path "dist\VoiceTranscriptionLocal.exe")) {
+            throw "构建失败：未生成 dist\VoiceTranscriptionLocal.exe"
+          }
+          foreach ($name in @("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")) {
+            $path = Join-Path "model-cache\models\asr" $name
+            if (-not (Test-Path $path)) { throw "模型文件缺失: $path" }
+          }
+
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item "dist\VoiceTranscriptionLocal.exe" "staging\VoiceTranscriptionLocal.exe"
+          Copy-Item -Recurse "model-cache\models" "staging\models"
+          Copy-Item "packaging\README-LOCAL.txt" "staging\README-LOCAL.txt"
+          Copy-Item "packaging\THIRD_PARTY_NOTICES.txt" "staging\THIRD_PARTY_NOTICES.txt"
+
+          @"
+          release_tag=${{ inputs.tag_name }}
+          flavor=local
+          source_commit=${{ github.sha }}
+          source_ref=${{ github.ref_name }}
+          model=sherpa-onnx-streaming-paraformer-bilingual-zh-en
+          model_hashes=see models/asr/MANIFEST.txt
+          build_utc=$([DateTime]::UtcNow.ToString("o"))
+          "@ | Out-File "staging\LOCAL_BUILD_INFO.txt" -Encoding utf8
+
+          Compress-Archive -Path "staging\*" -DestinationPath "VoiceTranscription-Windows-Local.zip" -Force
+
+          Get-ChildItem -Recurse staging | Select-Object FullName, Length
+          Get-FileHash "VoiceTranscription-Windows-Local.zip" -Algorithm SHA256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceTranscription-Windows-Local
+          path: VoiceTranscription-Windows-Local.zip
+          retention-days: 14
+
+      - name: Verify target release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${{ inputs.tag_name }}" --json tagName,isDraft,assets
+
+      - name: Attach asset to existing release
+        if: ${{ inputs.upload }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ inputs.tag_name }}" `
+            "VoiceTranscription-Windows-Local.zip" --clobber

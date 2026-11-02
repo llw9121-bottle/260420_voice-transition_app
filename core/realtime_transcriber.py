@@ -29,6 +29,21 @@ from utils.logger import logger
 from core.formatter.base import TranscriptionSegment
 
 
+def _create_asr_client(config: ASRConfig):
+    """按配置创建 ASR 客户端。
+
+    cloud 分支必须引用模块级 DashScopeASRClient，
+    这样现有测试对模块符号的 monkeypatch 仍然生效。
+    """
+    from config.settings import settings
+
+    if settings.asr.provider == 'local':
+        # 惰性导入：云端构建和离线测试不要求安装 sherpa-onnx。
+        from api.local_asr import LocalASRClient
+        return LocalASRClient(config)
+    return DashScopeASRClient(config)
+
+
 @dataclass
 class TranscriberState:
     """转录器状态"""
@@ -225,7 +240,7 @@ class RealtimeTranscriber:
             self._update_status("connecting")
             
             # 创建 ASR 客户端
-            self.asr_client = DashScopeASRClient(self.asr_config)
+            self.asr_client = _create_asr_client(self.asr_config)
             
             # 启动 ASR 服务
             started = self.asr_client.start(
@@ -277,6 +292,8 @@ class RealtimeTranscriber:
     def _send_audio_loop(self):
         """网络发送与重连均在独立线程执行，采集回调只入队。"""
         interrupted = False
+        # 本地引擎没有网络重连概念，避免积压时误报“连接中断”。
+        supports_reconnect = getattr(self.asr_client, 'supports_reconnect', True)
         while True:
             if self._stop_event.is_set():
                 if self.recorder.audio_queue.empty() or time.monotonic() >= self._drain_deadline:
@@ -295,11 +312,12 @@ class RealtimeTranscriber:
                 sent = False
             if not sent:
                 self.failed_audio_bytes += len(data)
-                if not interrupted:
+                if supports_reconnect and not interrupted:
                     self._update_status('reconnecting')
                 interrupted = True
             elif interrupted:
-                self._update_status('recording')
+                if supports_reconnect:
+                    self._update_status('recording')
                 interrupted = False
         while not self.recorder.audio_queue.empty():
             data = self.recorder.get_audio_data(timeout=0)

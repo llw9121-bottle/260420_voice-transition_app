@@ -1,0 +1,4 @@
+# 本地 ASR 构建变体依赖
+# 云端版不需要安装本文件；本地版仍保留 requirements.txt 以支持云端 LLM 整理。
+-r requirements.txt
+sherpa-onnx==2.0.1

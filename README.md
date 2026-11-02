@@ -3,6 +3,8 @@
 > 基于阿里云 AI 的桌面语音识别应用，帮你把录音快速转成结构化文档。
 >
 > 当前最新版本：**v2.0**（Windows / macOS 绿色版）
+>
+> Windows 提供两个版本：**云端识别版**（默认）和**本地识别版**（音频不出本机）。
 
 ## 🤔 这是什么？能帮我做什么？
 
@@ -63,6 +65,8 @@
 | 段落整理（未勾选「AI 语义分段」） | 是 | 否 |
 | 段落整理（勾选「AI 语义分段」） | 是 | 是 |
 | 行为分析 | 是 | 是（含行为定义与引文依据） |
+
+> **本地识别版例外**：使用 `VoiceTranscription-Windows-Local.zip` 时，上表中的“音频是否上传”全部为**否**——音频只在本机转写。但只要使用「AI 语义分段」或「行为分析」，转写文本仍会发送给阿里云百炼。
 
 ### 高私密性场景建议
 
@@ -162,12 +166,29 @@
 
 #### Windows 用户
 
+##### 云端识别版（默认，推荐）
+
 1. 打开 [v2.0 Releases 页面](https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v2.0)
 2. 下载 `VoiceTranscription-Windows.zip`
 3. 解压到独立文件夹（路径尽量不要包含中文；程序会在同目录生成 `.env`、`sessions`、`output`、`logs`）
 4. 双击 `VoiceTranscription.exe` 启动
 5. 首次启动会弹出 API Key 配置对话框，粘贴 Key 并保存
 6. 重启应用后开始使用
+
+##### 本地识别版（音频不出本机）
+
+1. 打开同一个 [v2.0 Releases 页面](https://github.com/llw9121-bottle/260420_voice-transition_app/releases/tag/v2.0)
+2. 下载 `VoiceTranscription-Windows-Local.zip`（约 250MB，已内置识别模型）
+3. 解压到独立文件夹；**`models` 文件夹必须与 exe 位于同一目录**，不要只移动 exe
+4. 双击 `VoiceTranscriptionLocal.exe` 启动
+5. 无需 DashScope API Key，点击「开始录音」即可转写
+
+本地版限制：
+
+- 仅支持中文和英文；转写结果暂不含标点
+- 「AI 语义分段」和「行为分析」仍使用阿里云百炼，需要 `BAILIAN_API_KEY`
+- 未配置百炼 Key 时，本地转写、原始转录、清理口语、按停顿分段均可正常使用
+- 建议 4GB 以上内存，预留约 1GB 磁盘空间
 
 #### macOS 用户
 
@@ -431,6 +452,7 @@ A: LLM 判定本身具有随机性，即使固定种子和较低温度也无法�
 260420_voice-transition_app/
 ├── api/                    # API 客户端层
 │   ├── dashscope_asr.py   # DashScope 实时 ASR 客户端
+│   ├── local_asr.py       # 本地 sherpa-onnx 流式 ASR 客户端
 │   └── bailian_llm.py     # 百炼大语言模型客户端
 ├── core/                   # 核心业务逻辑层
 │   ├── audio_recorder.py  # PyAudio 音频采集
@@ -462,12 +484,16 @@ A: LLM 判定本身具有随机性，即使固定种子和较低温度也无法�
 │   ├── exceptions.py      # 自定义异常
 │   ├── logger.py          # 日志配置
 │   └── proxy.py           # 代理策略与回退
+├── packaging/             # 本地版 runtime hooks 与分发说明
+├── scripts/               # 模型下载等构建脚本
 ├── tests/                  # 单元测试和端到端测试
 ├── app.py                  # 应用入口
-├── app.spec                # PyInstaller Windows 打包配置
-├── app-mac.spec            # PyInstaller macOS 打包配置
+├── app.spec                # PyInstaller Windows 云端版打包配置
+├── app-mac.spec            # PyInstaller macOS 云端版打包配置
+├── app-local.spec          # PyInstaller Windows 本地 ASR 版打包配置
 ├── BUILD.md                # 打包说明
-└── requirements.txt        # Python 依赖
+├── requirements.txt        # Python 依赖（云端版）
+└── requirements-local.txt  # 本地 ASR 版附加依赖
 ```
 
 ### 打包发布

@@ -14,7 +14,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 计算项目根目录
@@ -50,6 +50,15 @@ _PUBLIC_DASHSCOPE_HOSTS = {
     "us-east-1": "dashscope-us.aliyuncs.com",
     "cn-hongkong": "cn-hongkong.dashscope.aliyuncs.com",
 }
+
+
+def is_local_build() -> bool:
+    """本地专用构建由 runtime hook 设置 APP_FLAVOR=local。"""
+    return os.environ.get('APP_FLAVOR', 'cloud').strip().lower() == 'local'
+
+
+def _default_asr_provider() -> str:
+    return 'local' if is_local_build() else 'cloud'
 
 
 class APISettings(BaseSettings):
@@ -223,11 +232,43 @@ class ASRSettings(BaseSettings):
         extra="ignore"
     )
 
+    provider: str = Field(
+        default_factory=_default_asr_provider,
+        description="ASR 后端: cloud(默认) 或 local",
+        validation_alias="ASR_PROVIDER"
+    )
+
+    local_model_dir: str = Field(
+        default="",
+        description="本地 ASR 模型目录；留空表示 <应用目录>/models/asr",
+        validation_alias="ASR_LOCAL_MODEL_DIR"
+    )
+
+    local_num_threads: int = Field(
+        default=2,
+        description="本地 ASR 推理线程数 [1, 8]",
+        validation_alias="ASR_LOCAL_NUM_THREADS"
+    )
+
     language: str = Field(
         default="zh",
         description="识别语言 (zh=中文, yue=粤语, en=英文, ja=日语等)",
         validation_alias="ASR_LANGUAGE"
     )
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        text = (value or "").strip().lower()
+        if text not in {"cloud", "local"}:
+            logger.warning(f"未知 ASR_PROVIDER={text!r}，回退到默认值")
+            return _default_asr_provider()
+        return text
+
+    @field_validator("local_num_threads")
+    @classmethod
+    def _clamp_threads(cls, value: int) -> int:
+        return max(1, min(8, int(value)))
 
     vad_enable: bool = Field(
         default=True,
@@ -287,6 +328,10 @@ class AppSettings(BaseSettings):
 
 # 全局配置实例
 settings = AppSettings()
+logger.info(
+    f"ASR provider: {settings.asr.provider} "
+    f"(flavor={os.environ.get('APP_FLAVOR', 'cloud')})"
+)
 
 # 在进程启动早期应用代理策略，requests 与 websocket-client 都会读取这些环境变量。
 apply_proxy_policy(
@@ -300,6 +345,33 @@ apply_proxy_policy(
         settings.api.dashscope_host,
     ],
 )
+
+
+def get_local_asr_model_dir() -> Path:
+    """本地 ASR 模型目录。
+
+    模型与 exe 同级存放，而不是放进 PyInstaller 的临时解压目录，
+    避免 one-file 启动时反复复制数百 MB。
+    """
+    raw = (settings.asr.local_model_dir or '').strip()
+    path = Path(raw).expanduser() if raw else Path('models') / 'asr'
+    return path if path.is_absolute() else project_root / path
+
+
+def is_local_asr() -> bool:
+    return settings.asr.provider == 'local'
+
+
+LOCAL_ASR_LANGUAGES = frozenset({'zh', 'en'})
+
+
+def normalize_asr_language(code: str) -> str:
+    """本地引擎只支持中英文，其余语言回退中文。"""
+    text = (code or '').strip() or 'zh'
+    if is_local_asr() and text not in LOCAL_ASR_LANGUAGES:
+        logger.warning(f'本地 ASR 不支持语言 {text!r}，回退到 zh')
+        return 'zh'
+    return text
 
 
 def preview_llm_content(value: str, limit: int = 200) -> str:
@@ -326,10 +398,14 @@ def check_api_configuration() -> dict:
         配置状态字典
     """
     api = settings.api
+    local = settings.asr.provider == 'local'
 
     return {
         "dashscope_configured": api.is_dashscope_configured,
         "bailian_configured": api.is_bailian_configured,
+        # 本地版不需要 DashScope Key 即可转写；云端版维持原有语义。
+        "asr_configured": local or api.is_dashscope_configured,
+        "asr_provider": settings.asr.provider,
         "dashscope_key_preview": "已设置" if api.dashscope_api_key else "未设置",
         "bailian_key_preview": "已设置" if api.bailian_api_key else "未设置(可使用DashScope Key)",
     }
@@ -449,6 +525,7 @@ def save_api_configuration(
     workspace_id: Optional[str] = None,
     proxy_mode: Optional[str] = None,
     proxy_url: Optional[str] = None,
+    allow_empty_dashscope: bool = False,
 ) -> bool:
     """
     保存 API 配置到 .env 文件。
@@ -465,7 +542,10 @@ def save_api_configuration(
         是否保存成功
     """
     try:
-        dashscope_key = _validate_api_key(dashscope_api_key, 'DashScope API Key', allow_empty=False)
+        # 本地识别版允许只配置百炼 Key。
+        dashscope_key = _validate_api_key(
+            dashscope_api_key, 'DashScope API Key', allow_empty=allow_empty_dashscope,
+        )
         bailian_key = _validate_api_key(bailian_api_key, '百炼 API Key')
         lines = _load_env_lines()
 

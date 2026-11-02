@@ -11,7 +11,7 @@ import customtkinter as ctk
 from pathlib import Path
 from typing import Optional, Callable
 
-from config.settings import settings, project_root
+from config.settings import settings, project_root, is_local_asr, normalize_asr_language
 from core.formatter.base import FormattedDocument, FormattingStyle
 from core.formatter.behavior_matcher import BehaviorConfig
 from gui.theme import AppColors, AppFonts
@@ -49,7 +49,7 @@ class MainWindow:
         # 创建主窗口（必须先创建 root 才能创建 StringVar）
         self.root = ctk.CTk()
         self.root.configure(fg_color=AppColors.BACKGROUND)
-        self.root.title("语音实时转录系统")
+        self.root.title("语音实时转录系统（本地识别版）" if is_local_asr() else "语音实时转录系统")
         self.root.geometry("1280x840")
         self.root.minsize(840, 640)
 
@@ -60,7 +60,9 @@ class MainWindow:
 
         # 从用户配置加载 ASR 设置，如果没有则使用默认配置
         from config.settings import settings
-        self.saved_language = saved_config.get("asr_language", settings.asr.language)
+        self.saved_language = normalize_asr_language(
+            saved_config.get("asr_language", settings.asr.language)
+        )
         self.saved_vad_ms = saved_config.get("vad_silence_ms", settings.asr.vad_silence_ms)
 
         # 存储回调函数
@@ -269,7 +271,7 @@ class MainWindow:
 
         self.asr_label = ctk.CTkLabel(
             asr_inner,
-            text="识别设置",
+            text="识别设置（本地模型）" if is_local_asr() else "识别设置",
             font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
         self.asr_label.pack(anchor="w", pady=(0, 8))
@@ -282,19 +284,22 @@ class MainWindow:
         )
         self.language_label.pack(anchor="w", padx=5, pady=(0, 4))
 
-        # 常用语言列表，按使用频率排序
-        language_options = [
-            "zh - 中文",
-            "yue - 粤语",
-            "en - 英文",
-            "ja - 日语",
-            "ko - 韩语",
-            "de - 德语",
-            "fr - 法语",
-            "es - 西班牙语",
-            "ru - 俄语",
-            "other"
-        ]
+        # 本地引擎仅支持中英文；云端版保留完整语言列表。
+        if is_local_asr():
+            language_options = ["zh - 中文", "en - 英文"]
+        else:
+            language_options = [
+                "zh - 中文",
+                "yue - 粤语",
+                "en - 英文",
+                "ja - 日语",
+                "ko - 韩语",
+                "de - 德语",
+                "fr - 法语",
+                "es - 西班牙语",
+                "ru - 俄语",
+                "other"
+            ]
         # 找到匹配用户保存语言的选项
         default_language_display = language_options[0]
         for opt in language_options:
@@ -338,6 +343,17 @@ class MainWindow:
             text_color=AppColors.TEXT_MUTED
         )
         self.vad_hint_label.pack(anchor="e", padx=5)
+
+        if is_local_asr():
+            self.local_hint_label = ctk.CTkLabel(
+                asr_inner,
+                text="本地模型仅支持中/英文，转写暂不含标点",
+                font=ctk.CTkFont(AppFonts.FAMILY, 9),
+                text_color=AppColors.TEXT_MUTED,
+                wraplength=300,
+                justify="left",
+            )
+            self.local_hint_label.pack(anchor="w", padx=5, pady=(4, 0))
 
         # 卡片 5: 音频输入设备选择
         device_card = ctk.CTkFrame(self.settings_frame)
@@ -509,8 +525,9 @@ class MainWindow:
     def set_recording_state(self, state: RecordingState) -> None:
         """只由应用确认的生命周期驱动按钮、设置和录音指示灯。"""
         self.recording_state = state
+        ready_label = '就绪 · 本地识别' if is_local_asr() else '就绪'
         labels = {
-            RecordingState.READY: '就绪', RecordingState.CONNECTING: '正在连接语音服务…',
+            RecordingState.READY: ready_label, RecordingState.CONNECTING: '正在加载本地模型…' if is_local_asr() else '正在连接语音服务…',
             RecordingState.RECORDING: '正在录音', RecordingState.PAUSED: '已暂停',
             RecordingState.RECONNECTING: '连接中断，正在尝试恢复',
             RecordingState.STOPPING: '正在结束录音并保存会话…',
@@ -927,6 +944,10 @@ class MainWindow:
             vad_ms = merged.get("vad_silence_ms")
             if not isinstance(vad_ms, int) or vad_ms < 200 or vad_ms > 2000:
                 merged["vad_silence_ms"] = default_config["vad_silence_ms"]
+            # 本地版不支持旧配置中的粤语/日语等语言，回退到中文。
+            merged["asr_language"] = normalize_asr_language(
+                merged.get("asr_language", default_config["asr_language"])
+            )
             logger.debug(f"加载用户配置: {merged}")
             return merged
         except Exception as e:
@@ -1121,7 +1142,8 @@ VAD（语音活动检测）静音时长控制断句灵敏度：
             initial_workspace=settings.api.dashscope_workspace_id,
             initial_proxy_mode=settings.api.proxy_mode,
             initial_proxy_url=settings.api.proxy_url,
-            is_first_launch=False
+            is_first_launch=False,
+            dashscope_optional=is_local_asr(),
         )
         self.root.wait_window(dialog.window)
 

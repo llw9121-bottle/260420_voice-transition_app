@@ -43,7 +43,8 @@ class APISettingsDialog:
         initial_workspace: str = "",
         initial_proxy_mode: str = "system",
         initial_proxy_url: str = "",
-        is_first_launch: bool = False
+        is_first_launch: bool = False,
+        dashscope_optional: bool = False,
     ):
         """
         初始化对话框
@@ -58,10 +59,12 @@ class APISettingsDialog:
             initial_proxy_mode: 初始代理模式 system/direct/manual
             initial_proxy_url: 初始手动代理地址
             is_first_launch: 是否是首次启动引导
+            dashscope_optional: 本地识别版允许 DashScope Key 留空
         """
         self.parent = parent
         self.on_save = on_save
         self.is_first_launch = is_first_launch
+        self.dashscope_optional = dashscope_optional
 
         # 创建对话框窗口
         self.window = ctk.CTkToplevel(parent)
@@ -116,7 +119,10 @@ class APISettingsDialog:
         self.main_frame.pack(fill="both", expand=True, padx=15, pady=15)
 
         # 标题
-        title_text = "欢迎使用语音实时转录系统" if self.is_first_launch else "配置 API Key"
+        if self.dashscope_optional:
+            title_text = "配置 API Key（本地识别版）"
+        else:
+            title_text = "欢迎使用语音实时转录系统" if self.is_first_launch else "配置 API Key"
         self.title_label = ctk.CTkLabel(
             self.main_frame,
             text=title_text,
@@ -125,7 +131,11 @@ class APISettingsDialog:
         self.title_label.pack(anchor="w", pady=(0, 10))
 
         # 说明文本
-        intro_text = """本应用需要阿里云 DashScope 服务进行实时语音识别。
+        if self.dashscope_optional:
+            intro_text = """本地识别版使用内置模型完成语音转写，不需要 DashScope API Key。
+如需使用 AI 语义分段或行为分析，请填写百炼（Bailian）API Key。"""
+        else:
+            intro_text = """本应用需要阿里云 DashScope 服务进行实时语音识别。
 请输入你的 API Key。如果你还没有，可以查看步骤获取。"""
         self.desc_label = ctk.CTkLabel(
             self.main_frame,
@@ -198,7 +208,7 @@ class APISettingsDialog:
 
         label = ctk.CTkLabel(
             header_frame,
-            text="DashScope API Key *",
+            text="DashScope API Key（本地版可留空）" if self.dashscope_optional else "DashScope API Key *",
             font=ctk.CTkFont(*AppFonts.SUBTITLE)
         )
         label.pack(side="left")
@@ -478,8 +488,8 @@ class APISettingsDialog:
         dashscope_key = self.dashscope_entry.get().strip()
         bailian_key = self.bailian_entry.get().strip()
 
-        # 验证
-        if not dashscope_key:
+        # 验证；本地识别版允许只配置百炼 Key。
+        if not dashscope_key and not self.dashscope_optional:
             messagebox.showerror(
                 "输入无效",
                 "DashScope API Key 不能为空，请输入你的 API Key。"
@@ -487,7 +497,7 @@ class APISettingsDialog:
             return
 
         # DashScope Key 格式检查（通常以 sk- 开头）
-        if not dashscope_key.startswith('sk-'):
+        if dashscope_key and not dashscope_key.startswith('sk-'):
             result = messagebox.askyesno(
                 "格式警告",
                 "DashScope API Key 通常以 'sk-' 开头。\n\n你输入的格式看起来不对，是否仍然继续保存？"
@@ -507,7 +517,8 @@ class APISettingsDialog:
         else:
             proxy_mode = "system"
         success = save_api_configuration(
-            dashscope_key, bailian_key, region, workspace_id, proxy_mode, proxy_url
+            dashscope_key, bailian_key, region, workspace_id, proxy_mode, proxy_url,
+            allow_empty_dashscope=self.dashscope_optional,
         )
         if not success:
             messagebox.showerror(

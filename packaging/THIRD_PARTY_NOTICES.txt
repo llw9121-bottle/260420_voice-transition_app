@@ -1,0 +1,23 @@
+Third-Party Notices
+===================
+
+sherpa-onnx
+-----------
+本地语音识别运行时。
+Source: https://github.com/k2-fsa/sherpa-onnx
+License: Apache License 2.0
+
+onnxruntime
+-----------
+sherpa-onnx 使用的推理运行时（随 sherpa-onnx-core 分发）。
+Source: https://github.com/microsoft/onnxruntime
+License: MIT
+
+Paraformer streaming bilingual zh-en model
+------------------------------------------
+本地转写使用的声学模型。
+Source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+Model origin: FunASR / Paraformer
+License: 以模型发布页和上游仓库的许可声明为准；分发或商用前请自行核实。
+
+本项目不修改上述组件的源代码。
